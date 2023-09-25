@@ -139,8 +139,8 @@ float* readMatrixFromFile(const std::string& filePath, int* rows, int* cols) {
 
 
 int main() {
-    const std::string filePathA = "./data/2/input0.raw";
-    const std::string filePathB = "./data/2/input1.raw";
+    const std::string filePathA = "./data/9/input0.raw";
+    const std::string filePathB = "./data/9/input1.raw";
 
     float *hostA; // The A matrix
     float *hostB; // The B matrix
