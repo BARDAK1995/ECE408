@@ -118,7 +118,6 @@ int main(int argc, char **argv) {
   wbTime_start(Compute, "Performing CUDA computation");
   //@@ Launch the GPU Kernel here
   matrixMultiplyShared<<<DimGrid, DimBlock>>>(deviceA, deviceB, deviceC, numARows, numAColumns, numBRows, numBColumns, numCRows, numCColumns);
-
   cudaDeviceSynchronize();
   wbTime_stop(Compute, "Performing CUDA computation");
 
