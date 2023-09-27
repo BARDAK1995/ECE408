@@ -103,7 +103,7 @@ int main(int argc, char *argv[]) {
   dim3 dimGrid(gridXdim, gridYdim, gridZdim);
   dim3 dimBlock(input_TILE_WIDTH, input_TILE_WIDTH, input_TILE_WIDTH);
   //@@ Launch the GPU kernel here
-  conv3d<<<dimGrid,  dimBlock>>>(deviceInput, deviceOutput, z_size, y_size, x_size);
+  conv3d<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, z_size, y_size, x_size);
   cudaDeviceSynchronize();
   wbTime_stop(Compute, "Doing the computation on the GPU");
 
