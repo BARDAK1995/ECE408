@@ -4,7 +4,7 @@
 
 #include <wb.h>
 
-#define BLOCK_SIZE 1024 //@@ You can change this
+#define BLOCK_SIZE 512 //@@ You can change this
 
 #define wbCheck(stmt)                                                     \
   do {                                                                    \
@@ -15,31 +15,72 @@
       return -1;                                                          \
     }                                                                     \
   } while (0)
+  
+  __global__ void kernelAdd1(float *input, float *output, int len) {
+    int i = 2 * threadIdx.x + blockIdx.x * blockDim.x * 2; // Adjusted indexing with block offset
+    for (int stride = 1; stride <= blockDim.x; stride *= 2) {
+        if (threadIdx.x % stride == 0 && (i + stride) < len) {
+            input[i] += input[i + stride];
+        }
+        __syncthreads();
+    }
+    // Every block writes its result to deviceOutput.
+    if (threadIdx.x == 0) {
+        output[blockIdx.x] = input[i];
+    }
+  }
+  
+  __global__ void ConvergentSumReductionKernel(float* input, float* output, int len) {
+    // Continuous thread assignment
+    unsigned int i = threadIdx.x + blockIdx.x * blockDim.x * 2;
+
+    // Reverse stride logic for reduced control divergence
+    for (unsigned int stride = blockDim.x; stride >= 1; stride /= 2) {
+        __syncthreads(); // Ensure all previous updates in this block are visible
+        if (threadIdx.x < stride && (i + stride) < len) {
+            input[i] += input[i + stride];
+        }
+    }
+
+    // First thread of each block writes the block's result to output
+    if (threadIdx.x == 0) {
+        output[blockIdx.x] = input[i];
+    }
+}
 
 __global__ void total(float* input, float* output, int len) {
-  __shared__ float partialSum[BLOCK_SIZE];
+  __shared__ float input_s[BLOCK_SIZE];
   unsigned int t = threadIdx.x;
   unsigned int i = blockIdx.x * (2 * BLOCK_SIZE) + threadIdx.x;
-  //@@ Load a segment of the input vector into shared memory
+
+  // Ensure that we don't read out-of-bounds data
   if (i + BLOCK_SIZE < len) {
-      partialSum[t] = input[i] + input[i + BLOCK_SIZE];
+      input_s[t] = input[i] + input[i + BLOCK_SIZE];
   } else if (i < len) {
-      partialSum[t] = input[i];
+      input_s[t] = input[i];
   } else {
-      partialSum[t] = 0;
+      input_s[t] = 0;
   }
-  //@@ Traverse the reduction tree
+  
   for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
       __syncthreads();
       if (t < stride) {
-          partialSum[t] += partialSum[t + stride];
+          input_s[t] += input_s[t + stride];
       }
   }
-  //@@ Write the computed sum of the block to the output vector at the correct index
+
+  // Write the result for this block to the output
   if (t == 0) {
-      output[blockIdx.x] = partialSum[0];
+      output[blockIdx.x] = input_s[0];
   }
 }
+
+  //@@ Load a segment of the input vector into shared memory
+  //@@ Traverse the reduction tree
+  //@@ Write the computed sum of the block to the output vector at the
+  //@@ correct index
+
+
 int main(int argc, char **argv) {
   int ii;
   wbArg_t args;
@@ -88,6 +129,8 @@ int main(int argc, char **argv) {
 
   wbTime_start(Compute, "Performing CUDA computation");
   //@@ Launch the GPU Kernel here
+  // kernelAdd1<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, numInputElements);
+  // ConvergentSumReductionKernel<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, numInputElements);
   total<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, numInputElements);
 
   cudaDeviceSynchronize();
@@ -111,11 +154,12 @@ int main(int argc, char **argv) {
 
   wbTime_start(GPU, "Freeing GPU Memory");
   //@@ Free the GPU memory here
-  cudaFree(deviceInput);
-  cudaFree(deviceOutput);
+
   wbTime_stop(GPU, "Freeing GPU Memory");
 
   wbSolution(args, hostOutput, 1);
+  cudaFree(deviceInput);
+  cudaFree(deviceOutput);
   free(hostInput);
   free(hostOutput);
 
