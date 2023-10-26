@@ -6,7 +6,7 @@
 
 #include <wb.h>
 
-#define BLOCK_SIZE 512 //@@ You can change this
+#define BLOCK_SIZE 1024 //@@ You can change this
 
 #define wbCheck(stmt)                                                     \
   do {                                                                    \
@@ -24,6 +24,41 @@ __global__ void scan(float *input, float *output, int len) {
   //@@ You may need multiple kernel calls; write your kernels before this
   //@@ function and call them from the host
 }
+__global__ void Brent_Kung_scan_kernel(float *input, float *output, unsigned int len) {
+  const int sectionsize = blockDim.x*2;
+  __shared__ float XY[BLOCK_SIZE*2];
+  unsigned int i = 2 * blockIdx.x * blockDim.x + threadIdx.x;
+  // Load data into shared memory
+  if(i < len) 
+    XY[threadIdx.x] = input[i];
+  else 
+    XY[threadIdx.x] = 0.0f;
+  if(i + blockDim.x < len) 
+    XY[threadIdx.x + blockDim.x] = input[i + blockDim.x];
+  else 
+    XY[threadIdx.x + blockDim.x] = 0.0f;
+  // Reduction phase
+  for(unsigned int stride = 1; stride <= blockDim.x; stride *= 2) {
+      __syncthreads();
+      unsigned int index = (threadIdx.x + 1) * 2 * stride - 1;
+      if(index < sectionsize && (index-stride) >= 0) { 
+          XY[index] += XY[index - stride];
+      }
+  }
+  // Down-sweep phase
+  for (int stride = sectionsize / 4; stride > 0; stride /= 2) {
+      __syncthreads();
+      unsigned int index = (threadIdx.x + 1) * stride * 2 - 1;
+      if(index + stride < sectionsize) {
+          XY[index + stride] += XY[index];
+      }
+  }
+  __syncthreads();
+  // Write results back to global memory
+  if (i < len) output[i] = XY[threadIdx.x];
+  if ((i + blockDim.x) < len) output[i + blockDim.x] = XY[threadIdx.x + blockDim.x];
+}
+
 
 int main(int argc, char **argv) {
   wbArg_t args;
@@ -58,10 +93,13 @@ int main(int argc, char **argv) {
   wbTime_stop(GPU, "Copying input memory to the GPU.");
 
   //@@ Initialize the grid and block dimensions here
+  dim3 dimBlock(BLOCK_SIZE, 1, 1);
+  dim3 dimGrid((numElements - 1) / (BLOCK_SIZE * 2) + 1, 1, 1); // Ensuring all elements are covered
 
   wbTime_start(Compute, "Performing CUDA computation");
   //@@ Modify this to complete the functionality of the scan
   //@@ on the deivce
+  Brent_Kung_scan_kernel<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, numElements);
 
   cudaDeviceSynchronize();
   wbTime_stop(Compute, "Performing CUDA computation");
