@@ -6,7 +6,7 @@
 
 #include <wb.h>
 
-#define BLOCK_SIZE 1024 //@@ You can change this
+#define BLOCK_SIZE 512 //@@ You can change this
 
 #define wbCheck(stmt)                                                     \
   do {                                                                    \
@@ -18,16 +18,17 @@
     }                                                                     \
   } while (0)
 
-__global__ void scan(float *input, float *output, int len) {
-  //@@ Modify the body of this function to complete the functionality of
-  //@@ the scan on the device
-  //@@ You may need multiple kernel calls; write your kernels before this
-  //@@ function and call them from the host
-}
-__global__ void Brent_Kung_scan_kernel(float *input, float *output, unsigned int len) {
+  __global__ void accumulateSums(float *DataArray, float *Sums, int len) {
+    int index = 2 * blockIdx.x * blockDim.x + threadIdx.x;
+    int index2 = 2 * blockIdx.x * blockDim.x + threadIdx.x + blockDim.x;
+    if((blockIdx.x > 0) && (index < len)) DataArray[index] += Sums[blockIdx.x-1];
+    if((blockIdx.x > 0) && (index2 < len)) DataArray[index2] += Sums[blockIdx.x-1];
+  }
+
+__global__ void scan(float *input, float *output, float *AuxilarySum, int len) {
   const int sectionsize = blockDim.x*2;
   __shared__ float XY[BLOCK_SIZE*2];
-  unsigned int i = 2 * blockIdx.x * blockDim.x + threadIdx.x;
+  int i = 2 * blockIdx.x * blockDim.x + threadIdx.x;
   // Load data into shared memory
   if(i < len) 
     XY[threadIdx.x] = input[i];
@@ -37,24 +38,26 @@ __global__ void Brent_Kung_scan_kernel(float *input, float *output, unsigned int
     XY[threadIdx.x + blockDim.x] = input[i + blockDim.x];
   else 
     XY[threadIdx.x + blockDim.x] = 0.0f;
-  // Reduction phase
-  for(unsigned int stride = 1; stride <= blockDim.x; stride *= 2) {
+  // Reduction forward
+  for(int stride = 1; stride <= blockDim.x; stride *= 2) {
       __syncthreads();
-      unsigned int index = (threadIdx.x + 1) * 2 * stride - 1;
+      int index = (threadIdx.x + 1) * 2 * stride - 1;
       if(index < sectionsize && (index-stride) >= 0) { 
           XY[index] += XY[index - stride];
       }
   }
-  // Down-sweep phase
+  // Traverse back up
   for (int stride = sectionsize / 4; stride > 0; stride /= 2) {
       __syncthreads();
-      unsigned int index = (threadIdx.x + 1) * stride * 2 - 1;
+      int index = (threadIdx.x + 1) * stride * 2 - 1;
       if(index + stride < sectionsize) {
           XY[index + stride] += XY[index];
       }
   }
   __syncthreads();
   // Write results back to global memory
+  //if its the last thread of the block, make it do this work, we do this first to make the kernel usable for SUM scanning as well
+  if(threadIdx.x == (blockDim.x-1)) AuxilarySum[blockIdx.x] =  XY[sectionsize-1];
   if (i < len) output[i] = XY[threadIdx.x];
   if ((i + blockDim.x) < len) output[i + blockDim.x] = XY[threadIdx.x + blockDim.x];
 }
@@ -66,25 +69,27 @@ int main(int argc, char **argv) {
   float *hostOutput; // The output list
   float *deviceInput;
   float *deviceOutput;
+  float *deviceSum;
   int numElements; // number of elements in the list
-
+  int numBlocks;
   args = wbArg_read(argc, argv);
-
   wbTime_start(Generic, "Importing data and creating memory on host");
   hostInput = (float *)wbImport(wbArg_getInputFile(args, 0), &numElements);
+  numBlocks = (numElements - 1) / (BLOCK_SIZE * 2) + 1;                     // number of blocks
   hostOutput = (float *)malloc(numElements * sizeof(float));
   wbTime_stop(Generic, "Importing data and creating memory on host");
 
   wbLog(TRACE, "The number of input elements in the input is ",
         numElements);
-
   wbTime_start(GPU, "Allocating GPU memory.");
   wbCheck(cudaMalloc((void **)&deviceInput, numElements * sizeof(float)));
   wbCheck(cudaMalloc((void **)&deviceOutput, numElements * sizeof(float)));
+  wbCheck(cudaMalloc((void **)&deviceSum, numBlocks * sizeof(float)));       //allocating device sum memory
   wbTime_stop(GPU, "Allocating GPU memory.");
 
   wbTime_start(GPU, "Clearing output memory.");
   wbCheck(cudaMemset(deviceOutput, 0, numElements * sizeof(float)));
+  wbCheck(cudaMemset(deviceSum, 0, numBlocks * sizeof(float)));
   wbTime_stop(GPU, "Clearing output memory.");
 
   wbTime_start(GPU, "Copying input memory to the GPU.");
@@ -94,13 +99,14 @@ int main(int argc, char **argv) {
 
   //@@ Initialize the grid and block dimensions here
   dim3 dimBlock(BLOCK_SIZE, 1, 1);
-  dim3 dimGrid((numElements - 1) / (BLOCK_SIZE * 2) + 1, 1, 1); // Ensuring all elements are covered
+  dim3 dimGrid(numBlocks, 1, 1); // Ensuring all elements are covered
 
   wbTime_start(Compute, "Performing CUDA computation");
   //@@ Modify this to complete the functionality of the scan
   //@@ on the deivce
-  Brent_Kung_scan_kernel<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, numElements);
-
+  scan<<<dimGrid, dimBlock>>>(deviceInput, deviceOutput, deviceSum, numElements);
+  scan<<<dim3(1, 1, 1), dimBlock>>>(deviceSum, deviceSum, deviceSum, numBlocks);
+  accumulateSums<<<dimGrid, dimBlock>>>(deviceOutput, deviceSum, numElements);
   cudaDeviceSynchronize();
   wbTime_stop(Compute, "Performing CUDA computation");
 
@@ -111,6 +117,7 @@ int main(int argc, char **argv) {
 
   wbTime_start(GPU, "Freeing GPU Memory");
   cudaFree(deviceInput);
+  cudaFree(deviceSum);
   cudaFree(deviceOutput);
   wbTime_stop(GPU, "Freeing GPU Memory");
 
