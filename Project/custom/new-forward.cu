@@ -30,15 +30,15 @@ __global__ void conv_forward_kernel(float *output, const float *input, const flo
     const int tile_width = blockDim.x;
     // const int H_grid_blocks = (H_out - 1) / tile_width + 1; //tiles in outputHeight
     const int W_grid_blocks = (W_out - 1) / tile_width + 1;  //tiles in outputWidth
-    int m_feature = blockIdx.x;
-    int b = blockIdx.z;
-    int output_h = (blockIdx.y / W_grid_blocks) * tile_width + threadIdx.y;
-    int output_w = (blockIdx.y % W_grid_blocks) * tile_width + threadIdx.x;
+    const int m_feature = blockIdx.x;
+    const int b = blockIdx.z;
+    const int output_h = (blockIdx.y / W_grid_blocks) * tile_width + threadIdx.y;
+    const int output_w = (blockIdx.y % W_grid_blocks) * tile_width + threadIdx.x;
+    // starting index for current Block
+    const int input_h_start = output_h * S; 
+    const int input_w_start = output_w * S;
     int input_x;// input-x index
     int input_y;// input-y index
-    // starting index for current Block
-    int input_h_start = output_h * S; 
-    int input_w_start = output_w * S;
     float acc = 0.0f;
     if((output_h < H_out) && (output_w < W_out)){
         for(int c = 0; c < C; ++c){   // sum over all input channels
@@ -73,7 +73,6 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMalloc((void **)device_output_ptr, memSizeOutput);
     cudaMemcpy(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice);
     cudaMemcpy(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice);
-    cudaMemcpy(*device_output_ptr, host_output, memSizeOutput, cudaMemcpyHostToDevice);
     // // Useful snippet for error checking
     // cudaError_t error = cudaGetLastError();
     // if(error != cudaSuccess)
