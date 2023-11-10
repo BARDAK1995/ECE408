@@ -12,9 +12,7 @@ __global__ void castToUchar(unsigned char *output, float *input, int width, int 
   int y = threadIdx.y + blockIdx.y * blockDim.y;
   // Check if the thread is within image bounds
   if (x < width && y < height) {
-    // Calculate the index within the array for the pixel's first channel
     int start_idx = (y * width + x) * channels;
-    // Convert and store each channel's value
     for (int channel = 0; channel < channels; ++channel) {
       output[start_idx + channel] = (unsigned char)(255 * input[start_idx + channel]);
     }
@@ -22,34 +20,31 @@ __global__ void castToUchar(unsigned char *output, float *input, int width, int 
 }
 
 __global__ void rgbToGrayscaleKernel(unsigned char *grayImage, unsigned char *rgbImage, int width, int height) {
-  int col = threadIdx.x + blockIdx.x * blockDim.x;
-  int row = threadIdx.y + blockIdx.y * blockDim.y;
-
-  if (col < width && row < height) {
-    // Calculate the index within the array
-    int rgbIdx = (row * width + col) * 3; // 3 channels for RGB
-    int grayIdx = row * width + col;      // 1 channel for grayscale
+  int x = threadIdx.x + blockIdx.x * blockDim.x;
+  int y = threadIdx.y + blockIdx.y * blockDim.y;
+  if (x < width && y < height) {
+    int rgbIdx = (y * width + x) * 3; // 3 channels for RGB
+    int grayIdx = y * width + x;      // 1 channel for grayscale
     unsigned char r = rgbImage[rgbIdx];     // Red value
     unsigned char g = rgbImage[rgbIdx + 1]; // Green value
     unsigned char b = rgbImage[rgbIdx + 2]; // Blue value
-    // Compute the grayscale value using luminosity method
-    grayImage[grayIdx] = (unsigned char)(0.21f * r + 0.71f * g + 0.07f * b);
+    grayImage[grayIdx] = (unsigned char)(0.21f * r + 0.71f * g + 0.07f * b);// Compute the grayscale value using luminosity method
   }
 }
 
-__global__ void histogram_plusProbility(unsigned int *histogram, double *histProbability, unsigned char *grayImage, int imagesize){
+__global__ void histogram_plusProbility(unsigned int *histogram, float *histProbability, unsigned char *grayImage, int imagesize){
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
   int stride = blockDim.x * gridDim.x;
   while (idx < imagesize) {
     atomicAdd(&(histogram[grayImage[idx]]), 1);
-    histProbability[grayImage[idx]] = ((int)histogram[grayImage[idx]]) / (double)imagesize;
+    histProbability[grayImage[idx]] = histogram[grayImage[idx]] / (float)imagesize;//hist probability also calculated here, not the perfect implementation, but works
     idx += stride;
   }
 }
 
-__global__ void paralelScanPFD(double *output, double *histogramProb,  double *AuxilarySum, int len) {
+__global__ void paralelScanPFD(float *output, float *histogramProb,  float *AuxilarySum, int len) {
   const int sectionsize = blockDim.x*2;
-  __shared__ double XY[HISTOGRAM_BLOCK_SIZE*2];
+  __shared__ float XY[HISTOGRAM_BLOCK_SIZE*2];
   int i = 2 * blockIdx.x * blockDim.x + threadIdx.x;
   // Load data into shared memory
   XY[threadIdx.x]              = (i < len)              ? histogramProb[i]              : 0.0f;
@@ -58,17 +53,15 @@ __global__ void paralelScanPFD(double *output, double *histogramProb,  double *A
   for(int stride = 1; stride <= blockDim.x; stride *= 2) {
       __syncthreads();
       int index = (threadIdx.x + 1) * 2 * stride - 1;
-      if(index < sectionsize && (index-stride) >= 0) { 
-          XY[index] += XY[index - stride];
-      }
+      if(index < sectionsize && (index-stride) >= 0)
+        XY[index] += XY[index - stride];
   }
   // Traverse back up
   for (int stride = sectionsize / 4; stride > 0; stride /= 2) {
       __syncthreads();
       int index = (threadIdx.x + 1) * stride * 2 - 1;
-      if(index + stride < sectionsize) {
-          XY[index + stride] += XY[index];
-      }
+      if(index + stride < sectionsize)
+        XY[index + stride] += XY[index];
   }
   __syncthreads();
   // Write results back to global memory
@@ -77,47 +70,31 @@ __global__ void paralelScanPFD(double *output, double *histogramProb,  double *A
   if (i < len) output[i] = XY[threadIdx.x];
   if ((i + blockDim.x) < len) output[i + blockDim.x] = XY[threadIdx.x + blockDim.x];
 }
-__global__ void accumulateSums(double *DataArray, double *Sums, int len) {
+__global__ void accumulateSums(float *DataArray, float *Sums, int len) {
   int index = 2 * blockIdx.x * blockDim.x + threadIdx.x;
   int index2 = 2 * blockIdx.x * blockDim.x + threadIdx.x + blockDim.x;
   if((blockIdx.x > 0) && (index < len)) DataArray[index] += Sums[blockIdx.x-1];
   if((blockIdx.x > 0) && (index2 < len)) DataArray[index2] += Sums[blockIdx.x-1];
 }
 
-// __global__ void applyHistogramEqualization(unsigned char *grayscaleImage, unsigned char *outputImage, double *cdf, int width, int height) {
-//   int x = blockIdx.x * blockDim.x + threadIdx.x;
-//   int y = blockIdx.y * blockDim.y + threadIdx.y;
-//   const double cdfmin = cdf[0];
-
-//   if (x < width && y < height) {
-//     int idx = y * width + x;
-//     // Apply the histogram equalization function
-//     unsigned char pixel = grayscaleImage[idx];  //pixel brightness value we get from the image
-//     double correctedValue = 255.0 * (cdf[pixel] - cdfmin) / (1.0 - cdfmin); //brigtness is from 0-255 also the index of cdf so we get the corrected value from it
-//     correctedValue = fminf(fmaxf(correctedValue, 0.0), 255.0);     // Inline clamp logic: Clamp the value to the range [0, 255]
-//     outputImage[idx] = (unsigned char)correctedValue;
-//   }
-// }
-
-__global__ void applyHistogramEqualizationRGB(float *outputImage, unsigned char *rgbImage_unchar, double *cdf, int width, int height) {
+__global__ void applyHistogramEqualizationRGB(float *outputImage, unsigned char *rgbImage_unchar, float *cdf, int width, int height, int channels) {
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   const float cdfmin = (float)cdf[0];
   __syncthreads();
-
+  //we need the cdfmin value before starting
   if (x < width && y < height) {
     int idx = y * width + x;
-    int rgbIdx = idx * 3; // Index for RGB image
+    int rgbIdx = idx * channels; // Index for RGB image
     // Apply the histogram equalization function to each channel
-    for (int channel = 0; channel < 3; ++channel) {
+    for (int channel = 0; channel < channels; ++channel) {
       unsigned char pixel = rgbImage_unchar[rgbIdx + channel]; // Pixel value from each channel
       float correctedValue = 255.0f * (cdf[pixel] - cdfmin) / (1.0f - cdfmin); 
       correctedValue = fmin(fmax(correctedValue, 0.0f), 255.0f); // Clamp the value
-      outputImage[rgbIdx + channel] = correctedValue/255.0f;
+      outputImage[rgbIdx + channel] = correctedValue / 255.0f;
     }
   }
 }
-
 
 int main(int argc, char **argv) {
   wbArg_t args;
@@ -130,21 +107,8 @@ int main(int argc, char **argv) {
   float *hostOutputImageData;
   const char *inputImageFile;
 
-  float *deviceInputImageData;
-  float* deviceOutputImageData;
-  unsigned char *deviceCharImageData;
-  unsigned char *deviceGreyScaleImageData;
-
-  
-  unsigned int *devicehistogram;
-  
-  double *deviceProbabilitiesHist;
-  //@@ Insert more code here
-  
   args = wbArg_read(argc, argv); /* parse the input arguments */
-
   inputImageFile = wbArg_getInputFile(args, 0);
-
   wbTime_start(Generic, "Importing data and creating memory on host");
   inputImage = wbImport(inputImageFile);
   imageWidth = wbImage_getWidth(inputImage);
@@ -155,87 +119,64 @@ int main(int argc, char **argv) {
   hostOutputImageData = wbImage_getData(outputImage);
   wbTime_stop(Generic, "Importing data and creating memory on host");
 
+  //Part 1: casting to unsigned int and making it greyscale
   int imageSize = imageWidth * imageHeight;
-  wbLog(TRACE, imageWidth, " x ", imageHeight);
-  
+  float *deviceInputImageData;
+  float* deviceOutputImageData;
+  unsigned char *deviceCharImageData;
+  unsigned char *deviceGreyScaleImageData;
   cudaMalloc((void **)&deviceInputImageData, (imageSize*imageChannels) * sizeof(float));
   cudaMalloc((void **)&deviceOutputImageData, (imageSize*imageChannels) * sizeof(float));
   cudaMalloc((void **)&deviceCharImageData, (imageSize*imageChannels) * sizeof(unsigned char));
   cudaMalloc((void **)&deviceGreyScaleImageData, imageSize * sizeof(unsigned char));
-  cudaMalloc((void **)&devicehistogram, HISTOGRAM_LENGTH * sizeof(unsigned int));
-  cudaMalloc((void **)&deviceProbabilitiesHist, HISTOGRAM_LENGTH * sizeof(double));
-  cudaMemset(devicehistogram, 0, HISTOGRAM_LENGTH * sizeof(unsigned int));
-  cudaMemset(deviceProbabilitiesHist, 0.0 , HISTOGRAM_LENGTH * sizeof(double));
-
-  // Copy host memory to device memory (for the float input image)
-  cudaMemcpy(deviceInputImageData, hostInputImageData, (imageSize*imageChannels) * sizeof(float), cudaMemcpyHostToDevice);
-  
-  
-  // Set up the execution configuration
+  cudaMemcpy(deviceInputImageData, hostInputImageData, (imageSize*imageChannels) * sizeof(float), cudaMemcpyHostToDevice); // Copy host memory to device memory (for the float input image)
   dim3 dimGrid2d(ceil(imageWidth / (float)BLOCKWIDTH), ceil(imageHeight / (float)BLOCKWIDTH), 1);
   dim3 dimBlock2d(BLOCKWIDTH, BLOCKWIDTH, 1);
   castToUchar<<<dimGrid2d, dimBlock2d>>>(deviceCharImageData, deviceInputImageData, imageWidth, imageHeight, imageChannels);// we cast it to char first.
   rgbToGrayscaleKernel<<<dimGrid2d, dimBlock2d>>>(deviceGreyScaleImageData, deviceCharImageData, imageWidth, imageHeight);//to grayscale
 
-  //Histogram
+  //Part 2: Histogram
+  unsigned int *devicehistogram;
+  float *deviceProbabilitiesHist;
+  cudaMalloc((void **)&devicehistogram, HISTOGRAM_LENGTH * sizeof(unsigned int));
+  cudaMalloc((void **)&deviceProbabilitiesHist, HISTOGRAM_LENGTH * sizeof(float));
+  cudaMemset(devicehistogram, 0, HISTOGRAM_LENGTH * sizeof(unsigned int));
+  cudaMemset(deviceProbabilitiesHist, 0.0 , HISTOGRAM_LENGTH * sizeof(float));
   int stride = 4;
   int blockdim = HISTOGRAM_LENGTH;
   dim3 dimGrid1d(ceil(imageWidth*imageHeight/(float)blockdim/(float)stride), 1, 1);
   dim3 dimBlock1d(HISTOGRAM_LENGTH, 1, 1);
   histogram_plusProbility<<<dimGrid1d, dimBlock1d>>>(devicehistogram, deviceProbabilitiesHist, deviceGreyScaleImageData, imageSize);
-  
-  // unsigned int *hosthistogram; //sil
-  // double *hostProbHist; //sil
-  // hosthistogram = (unsigned int *)malloc(HISTOGRAM_LENGTH * sizeof(unsigned int));//sil
-  // hostProbHist = (double *)malloc(HISTOGRAM_LENGTH * sizeof(double));//sil
-  // cudaMemcpy(hosthistogram, devicehistogram, HISTOGRAM_LENGTH * sizeof(unsigned int), cudaMemcpyDeviceToHost);//sil
-  // cudaMemcpy(hostProbHist, deviceProbabilitiesHist, HISTOGRAM_LENGTH * sizeof(double), cudaMemcpyDeviceToHost);//sil
-  // wbLog(TRACE, hosthistogram[0],", " ,hosthistogram[1],", " , hosthistogram[2],", " , hosthistogram[3],", " , hosthistogram[4]);//sil
-  // wbLog(TRACE, hosthistogram[251],", " ,hosthistogram[252],", " , hosthistogram[253],", " , hosthistogram[254],", " , hosthistogram[255]);//sil
-  // wbLog(TRACE, hostProbHist[0],", " ,hostProbHist[1],", " , hostProbHist[2],", " , hostProbHist[3],", " , hostProbHist[4]);//sil
-  // wbLog(TRACE, hostProbHist[251],", " ,hostProbHist[252],", " , hostProbHist[253],", " , hostProbHist[254],", " , hostProbHist[255]);//sil
 
-
-  //paralel scan
-  double *deviceHistAuxSum;
-  double *deviceCDF;
+  //Part 3: paralel scan to get CDF which will be used in histogram equalization function
+  float *deviceHistAuxSum;
+  float *deviceCDF;
   int numElements = HISTOGRAM_LENGTH;
   int numBlocks = (numElements - 1) / (HISTOGRAM_BLOCK_SIZE * 2) + 1;
-  cudaMalloc((void **)&deviceHistAuxSum, numBlocks * sizeof(double));  
-  cudaMemset(deviceHistAuxSum, 0.0, numBlocks * sizeof(double));
-  cudaMalloc((void **)&deviceCDF, HISTOGRAM_LENGTH * sizeof(double));  
-  cudaMemset(deviceCDF, 0.0, HISTOGRAM_LENGTH * sizeof(double));
-
+  cudaMalloc((void **)&deviceHistAuxSum, numBlocks * sizeof(float));  
+  cudaMalloc((void **)&deviceCDF, HISTOGRAM_LENGTH * sizeof(float));  
+  cudaMemset(deviceHistAuxSum, 0.0f, numBlocks * sizeof(float));
+  cudaMemset(deviceCDF, 0.0f, HISTOGRAM_LENGTH * sizeof(float));
   dim3 dimBlockScan(HISTOGRAM_BLOCK_SIZE, 1, 1);
-  dim3 dimGridScan(numBlocks, 1, 1); // Ensuring all elements are covered
+  dim3 dimGridScan(numBlocks, 1, 1); 
   paralelScanPFD<<<dimGridScan, dimBlockScan>>>(deviceCDF, deviceProbabilitiesHist, deviceHistAuxSum, numElements);
   paralelScanPFD<<<dim3(1, 1, 1), dimBlockScan>>>(deviceHistAuxSum, deviceHistAuxSum, deviceHistAuxSum, numBlocks);
   accumulateSums<<<dimGridScan, dimBlockScan>>>(deviceCDF, deviceHistAuxSum, numElements);
-  // double *hostCDF; //sil
-  // hostCDF = (double *)malloc(HISTOGRAM_LENGTH * sizeof(double));//sil
-  // cudaMemcpy(hostCDF, deviceCDF, HISTOGRAM_LENGTH * sizeof(double), cudaMemcpyDeviceToHost);//sil
-  // wbLog(TRACE, hostCDF[0],", " ,hostCDF[1],", " , hostCDF[2],", " , hostCDF[3],", " , hostCDF[4]);//sil
-  // wbLog(TRACE, hostCDF[251],", " ,hostCDF[252],", " , hostCDF[253],", " , hostCDF[254],", " , hostCDF[255]);//sil
-  unsigned char *CorrectedImage;
-  cudaMalloc((void **)&CorrectedImage, (imageSize*imageChannels) * sizeof(unsigned char));
+  applyHistogramEqualizationRGB<<<dimGrid2d, dimBlock2d>>>(deviceOutputImageData, deviceCharImageData, deviceCDF, imageWidth, imageHeight, imageChannels);  //Part 4: histogram equalization function applied! to get the corrected image
+  
+  cudaDeviceSynchronize(); 
 
-  applyHistogramEqualizationRGB<<<dimGrid2d, dimBlock2d>>>(deviceOutputImageData, deviceCharImageData, deviceCDF, imageWidth, imageHeight);
-
-  cudaDeviceSynchronize();  // Wait for GPU to finish before accessing on host
-
-  // Copy device memory to host (for the unsigned char output image)
-  cudaMemcpy(hostOutputImageData, deviceOutputImageData, (imageSize*imageChannels) * sizeof(float), cudaMemcpyDeviceToHost);
-
-  // Now you can continue with the rest of the image processing steps...
+  cudaMemcpy(hostOutputImageData, deviceOutputImageData, (imageSize*imageChannels) * sizeof(float), cudaMemcpyDeviceToHost);  // Copy device memory to host (for the unsigned char output image)
 
   // Remember to free device memory
   cudaFree(deviceInputImageData);
+  cudaFree(deviceOutputImageData);
+  cudaFree(deviceCDF);
+  cudaFree(deviceHistAuxSum);
+  cudaFree(deviceProbabilitiesHist);
   cudaFree(deviceCharImageData);
   cudaFree(deviceGreyScaleImageData);
   cudaFree(devicehistogram);
   wbSolution(args, outputImage);
-
-  //@@ insert code here
-
   return 0;
 }
