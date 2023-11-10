@@ -42,7 +42,7 @@ __global__ void histogram_plusProbility(unsigned int *histogram, double *histPro
   int stride = blockDim.x * gridDim.x;
   while (idx < imagesize) {
     atomicAdd(&(histogram[grayImage[idx]]), 1);
-    histProbability[grayImage[idx]] = (histogram[grayImage[idx]]) / (double)imagesize;
+    histProbability[grayImage[idx]] = ((int)histogram[grayImage[idx]]) / (double)imagesize;
     idx += stride;
   }
 }
@@ -147,13 +147,13 @@ int main(int argc, char **argv) {
   dim3 dimBlock1d(HISTOGRAM_LENGTH, 1, 1);
   histogram_plusProbility<<<dimGrid1d, dimBlock1d>>>(devicehistogram, deviceProbabilitiesHist, deviceGreyScaleImageData, imageSize);
   
-  unsigned int *hosthistogram; //sil
-  double *hostProbHist; //sil
-  hosthistogram = (unsigned int *)malloc(HISTOGRAM_LENGTH * sizeof(unsigned int));//sil
-  hostProbHist = (double *)malloc(HISTOGRAM_LENGTH * sizeof(double));//sil
-  cudaMemcpy(hosthistogram, devicehistogram, HISTOGRAM_LENGTH * sizeof(unsigned int), cudaMemcpyDeviceToHost);//sil
-  cudaMemcpy(hostProbHist, deviceProbabilitiesHist, HISTOGRAM_LENGTH * sizeof(double), cudaMemcpyDeviceToHost);//sil
-  wbLog(TRACE, hosthistogram[0],", " ,hosthistogram[1],", " , hosthistogram[2],", " , hosthistogram[3],", " , hosthistogram[4]);//sil
+  // unsigned int *hosthistogram; //sil
+  // double *hostProbHist; //sil
+  // hosthistogram = (unsigned int *)malloc(HISTOGRAM_LENGTH * sizeof(unsigned int));//sil
+  // hostProbHist = (double *)malloc(HISTOGRAM_LENGTH * sizeof(double));//sil
+  // cudaMemcpy(hosthistogram, devicehistogram, HISTOGRAM_LENGTH * sizeof(unsigned int), cudaMemcpyDeviceToHost);//sil
+  // cudaMemcpy(hostProbHist, deviceProbabilitiesHist, HISTOGRAM_LENGTH * sizeof(double), cudaMemcpyDeviceToHost);//sil
+  // wbLog(TRACE, hosthistogram[0],", " ,hosthistogram[1],", " , hosthistogram[2],", " , hosthistogram[3],", " , hosthistogram[4]);//sil
   // wbLog(TRACE, hosthistogram[251],", " ,hosthistogram[252],", " , hosthistogram[253],", " , hosthistogram[254],", " , hosthistogram[255]);//sil
   // wbLog(TRACE, hostProbHist[0],", " ,hostProbHist[1],", " , hostProbHist[2],", " , hostProbHist[3],", " , hostProbHist[4]);//sil
   // wbLog(TRACE, hostProbHist[251],", " ,hostProbHist[252],", " , hostProbHist[253],", " , hostProbHist[254],", " , hostProbHist[255]);//sil
@@ -174,11 +174,11 @@ int main(int argc, char **argv) {
   paralelScanPFD<<<dimGridScan, dimBlockScan>>>(deviceCDF, deviceProbabilitiesHist, deviceHistAuxSum, numElements);
   paralelScanPFD<<<dim3(1, 1, 1), dimBlockScan>>>(deviceHistAuxSum, deviceHistAuxSum, deviceHistAuxSum, numBlocks);
   accumulateSums<<<dimGridScan, dimBlockScan>>>(deviceCDF, deviceHistAuxSum, numElements);
-  double *hostCDF; //sil
-  hostCDF = (double *)malloc(HISTOGRAM_LENGTH * sizeof(double));//sil
-  cudaMemcpy(hostCDF, deviceCDF, HISTOGRAM_LENGTH * sizeof(double), cudaMemcpyDeviceToHost);//sil
-  wbLog(TRACE, hostCDF[0],", " ,hostCDF[1],", " , hostCDF[2],", " , hostCDF[3],", " , hostCDF[4]);//sil
-  wbLog(TRACE, hostCDF[251],", " ,hostCDF[252],", " , hostCDF[253],", " , hostCDF[254],", " , hostCDF[255]);//sil
+  // double *hostCDF; //sil
+  // hostCDF = (double *)malloc(HISTOGRAM_LENGTH * sizeof(double));//sil
+  // cudaMemcpy(hostCDF, deviceCDF, HISTOGRAM_LENGTH * sizeof(double), cudaMemcpyDeviceToHost);//sil
+  // wbLog(TRACE, hostCDF[0],", " ,hostCDF[1],", " , hostCDF[2],", " , hostCDF[3],", " , hostCDF[4]);//sil
+  // wbLog(TRACE, hostCDF[251],", " ,hostCDF[252],", " , hostCDF[253],", " , hostCDF[254],", " , hostCDF[255]);//sil
 
 
   cudaDeviceSynchronize();  // Wait for GPU to finish before accessing on host
