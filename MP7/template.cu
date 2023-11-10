@@ -32,16 +32,29 @@ __global__ void rgbToGrayscaleKernel(unsigned char *grayImage, unsigned char *rg
   }
 }
 
-__global__ void histogram_plusProbility(unsigned int *histogram, float *histProbability, unsigned char *grayImage, int imagesize){
+__global__ void histogram_privatized(unsigned int *histogram, float *histProbability, unsigned char *grayImage, int imagesize){
+  __shared__ unsigned int privateHistogram[HISTOGRAM_LENGTH];
   int idx = threadIdx.x + blockIdx.x * blockDim.x;
-  int stride = blockDim.x * gridDim.x;
+  const int stride = blockDim.x * gridDim.x;
+  const int localIdx = threadIdx.x;
+  if (localIdx < HISTOGRAM_LENGTH) privateHistogram[localIdx] = 0; // Initialize private histogram with zeros
+  __syncthreads();
+  // Populate private histogram
   while (idx < imagesize) {
-    atomicAdd(&(histogram[grayImage[idx]]), 1);
-    histProbability[grayImage[idx]] = histogram[grayImage[idx]] / (float)imagesize;//hist probability also calculated here, not the perfect implementation, but works
-    idx += stride;
+      atomicAdd(&(privateHistogram[grayImage[idx]]), 1);
+      idx += stride;
+  }
+  __syncthreads();
+  // Merge private histogram into global histogram
+  if (localIdx < HISTOGRAM_LENGTH) {
+      atomicAdd(&(histogram[localIdx]), privateHistogram[localIdx]);
+  }
+  //we can do the hist probability calculation in this kernel, no need for additional launches
+  while (idx > 0) {
+    histProbability[grayImage[idx]] = histogram[grayImage[idx]] / (float)imagesize; //hist probability also calculated here, not the perfect implementation, but works
+    idx -= stride;
   }
 }
-
 __global__ void paralelScanPFD(float *output, float *histogramProb,  float *AuxilarySum, int len) {
   const int sectionsize = blockDim.x*2;
   __shared__ float XY[HISTOGRAM_BLOCK_SIZE*2];
@@ -142,15 +155,16 @@ int main(int argc, char **argv) {
   cudaMalloc((void **)&deviceProbabilitiesHist, HISTOGRAM_LENGTH * sizeof(float));
   cudaMemset(devicehistogram, 0, HISTOGRAM_LENGTH * sizeof(unsigned int));
   cudaMemset(deviceProbabilitiesHist, 0.0 , HISTOGRAM_LENGTH * sizeof(float));
-  int stride = 4;
+  int partition = 4;
   int blockdim = HISTOGRAM_LENGTH;
-  dim3 dimGrid1d(ceil(imageWidth*imageHeight/(float)blockdim/(float)stride), 1, 1);
+  dim3 dimGrid1d(ceil((imageWidth*imageHeight) / ((float)blockdim*partition)), 1, 1);
   dim3 dimBlock1d(HISTOGRAM_LENGTH, 1, 1);
-  histogram_plusProbility<<<dimGrid1d, dimBlock1d>>>(devicehistogram, deviceProbabilitiesHist, deviceGreyScaleImageData, imageSize);
+  histogram_privatized<<<dimGrid1d, dimBlock1d>>>(devicehistogram, deviceProbabilitiesHist, deviceGreyScaleImageData, imageSize);
 
   //Part 3: paralel scan to get CDF which will be used in histogram equalization function
   float *deviceHistAuxSum;
   float *deviceCDF;
+
   int numElements = HISTOGRAM_LENGTH;
   int numBlocks = (numElements - 1) / (HISTOGRAM_BLOCK_SIZE * 2) + 1;
   cudaMalloc((void **)&deviceHistAuxSum, numBlocks * sizeof(float));  
