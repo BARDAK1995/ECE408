@@ -84,6 +84,41 @@ __global__ void accumulateSums(double *DataArray, double *Sums, int len) {
   if((blockIdx.x > 0) && (index2 < len)) DataArray[index2] += Sums[blockIdx.x-1];
 }
 
+// __global__ void applyHistogramEqualization(unsigned char *grayscaleImage, unsigned char *outputImage, double *cdf, int width, int height) {
+//   int x = blockIdx.x * blockDim.x + threadIdx.x;
+//   int y = blockIdx.y * blockDim.y + threadIdx.y;
+//   const double cdfmin = cdf[0];
+
+//   if (x < width && y < height) {
+//     int idx = y * width + x;
+//     // Apply the histogram equalization function
+//     unsigned char pixel = grayscaleImage[idx];  //pixel brightness value we get from the image
+//     double correctedValue = 255.0 * (cdf[pixel] - cdfmin) / (1.0 - cdfmin); //brigtness is from 0-255 also the index of cdf so we get the corrected value from it
+//     correctedValue = fminf(fmaxf(correctedValue, 0.0), 255.0);     // Inline clamp logic: Clamp the value to the range [0, 255]
+//     outputImage[idx] = (unsigned char)correctedValue;
+//   }
+// }
+
+__global__ void applyHistogramEqualizationRGB(float *outputImage, unsigned char *rgbImage_unchar, double *cdf, int width, int height) {
+  int x = blockIdx.x * blockDim.x + threadIdx.x;
+  int y = blockIdx.y * blockDim.y + threadIdx.y;
+  const float cdfmin = (float)cdf[0];
+  __syncthreads();
+
+  if (x < width && y < height) {
+    int idx = y * width + x;
+    int rgbIdx = idx * 3; // Index for RGB image
+    // Apply the histogram equalization function to each channel
+    for (int channel = 0; channel < 3; ++channel) {
+      unsigned char pixel = rgbImage_unchar[rgbIdx + channel]; // Pixel value from each channel
+      float correctedValue = 255.0f * (cdf[pixel] - cdfmin) / (1.0f - cdfmin); 
+      correctedValue = fmin(fmax(correctedValue, 0.0f), 255.0f); // Clamp the value
+      outputImage[rgbIdx + channel] = correctedValue/255.0f;
+    }
+  }
+}
+
+
 int main(int argc, char **argv) {
   wbArg_t args;
   int imageWidth;
@@ -96,6 +131,7 @@ int main(int argc, char **argv) {
   const char *inputImageFile;
 
   float *deviceInputImageData;
+  float* deviceOutputImageData;
   unsigned char *deviceCharImageData;
   unsigned char *deviceGreyScaleImageData;
 
@@ -123,6 +159,7 @@ int main(int argc, char **argv) {
   wbLog(TRACE, imageWidth, " x ", imageHeight);
   
   cudaMalloc((void **)&deviceInputImageData, (imageSize*imageChannels) * sizeof(float));
+  cudaMalloc((void **)&deviceOutputImageData, (imageSize*imageChannels) * sizeof(float));
   cudaMalloc((void **)&deviceCharImageData, (imageSize*imageChannels) * sizeof(unsigned char));
   cudaMalloc((void **)&deviceGreyScaleImageData, imageSize * sizeof(unsigned char));
   cudaMalloc((void **)&devicehistogram, HISTOGRAM_LENGTH * sizeof(unsigned int));
@@ -179,12 +216,15 @@ int main(int argc, char **argv) {
   // cudaMemcpy(hostCDF, deviceCDF, HISTOGRAM_LENGTH * sizeof(double), cudaMemcpyDeviceToHost);//sil
   // wbLog(TRACE, hostCDF[0],", " ,hostCDF[1],", " , hostCDF[2],", " , hostCDF[3],", " , hostCDF[4]);//sil
   // wbLog(TRACE, hostCDF[251],", " ,hostCDF[252],", " , hostCDF[253],", " , hostCDF[254],", " , hostCDF[255]);//sil
+  unsigned char *CorrectedImage;
+  cudaMalloc((void **)&CorrectedImage, (imageSize*imageChannels) * sizeof(unsigned char));
 
+  applyHistogramEqualizationRGB<<<dimGrid2d, dimBlock2d>>>(deviceOutputImageData, deviceCharImageData, deviceCDF, imageWidth, imageHeight);
 
   cudaDeviceSynchronize();  // Wait for GPU to finish before accessing on host
 
   // Copy device memory to host (for the unsigned char output image)
-  
+  cudaMemcpy(hostOutputImageData, deviceOutputImageData, (imageSize*imageChannels) * sizeof(float), cudaMemcpyDeviceToHost);
 
   // Now you can continue with the rest of the image processing steps...
 
