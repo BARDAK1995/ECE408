@@ -13,7 +13,7 @@
 __global__ void spmvJDSKernel(float *out, int *matColStart, int *matCols,
                               int *matRowPerm, int *matRows,
                               float *matData, float *vec, int dim) {
-  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  const int row = blockIdx.x * blockDim.x + threadIdx.x;
   if (row < dim) { 
       unsigned int section = 0;
       const int nRowElements = matRows[row];
