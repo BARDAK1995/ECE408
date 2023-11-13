@@ -13,30 +13,31 @@
 __global__ void spmvJDSKernel(float *out, int *matColStart, int *matCols,
                               int *matRowPerm, int *matRows,
                               float *matData, float *vec, int dim) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row < dim) { 
-        float dot = 0; 
-        unsigned int section = 0;
-        const int nRowElements = matRows[row];
-        int dataindex = 0;
-        int column = 0; 
-        while (section < nRowElements) {
-          dataindex = row + matColStart[section];
-          column = matCols[dataindex];
-          dot += matData[dataindex] * vec[column];
-          section++;
-        }
-        out[matRowPerm[row]] = dot;
-    }
+  int row = blockIdx.x * blockDim.x + threadIdx.x;
+  if (row < dim) { 
+      unsigned int section = 0;
+      const int nRowElements = matRows[row];
+      const int originalOutputRow = matRowPerm[row];
+      int dataindex = 0;
+      int column = 0; 
+      float dot = 0.0f; 
+      while (section < nRowElements) {
+        dataindex = row + matColStart[section];
+        column = matCols[dataindex];
+        dot += matData[dataindex] * vec[column];
+        section++;
+      }
+      out[originalOutputRow] = dot;
+  }
 }
 
 static void spmvJDS(float *out, int *matColStart, int *matCols,
                     int *matRowPerm, int *matRows, float *matData,
                     float *vec, int dim) {
-  int threadsPerBlock = 256;
-  int numBlocks = ceil((float)dim / threadsPerBlock);
+  const int threadsPerBlock = 256;
+  const int numBlocks = ceil((float)dim / threadsPerBlock);
   dim3 grid(numBlocks, 1, 1);
-  dim3 block(threadsPerBlock, 1, 1)
+  dim3 block(threadsPerBlock, 1, 1);
   spmvJDSKernel<<<grid, block>>>(out, matColStart, matCols, matRowPerm, matRows, matData, vec, dim);
   cudaDeviceSynchronize();
 }
