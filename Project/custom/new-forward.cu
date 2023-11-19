@@ -225,7 +225,12 @@ __global__ void conv_forward_kernel_ConstantMem_SharedMem(float *output, const f
                 for(int i = 0; i < K; ++i){   // KxK filter (width)
                     input_x = input_w_start + i;
                     shared_x = input_x - input_x_Block_start; //where it is in corresponding input tile, we use this to determine if its in shared mem or not.
-                    acc += in_4d_global(b, c, input_y, input_x) * mask_4d(m_feature, c, j, i); 
+                    if((shared_x<SharedMatrix_width) && (shared_y<SharedMatrix_height)){
+                        acc += in_4d_shared(c, shared_y, shared_x) * mask_4d(m_feature, c, j, i); 
+                    }
+                    else{
+                        acc += in_4d_global(b, c, input_y, input_x) * mask_4d(m_feature, c, j, i); 
+                    }
                 }
             }
         }
