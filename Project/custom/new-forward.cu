@@ -1,7 +1,7 @@
 #include <cmath>
 #include <iostream>
 #include "gpu-new-forward.h"
-__constant__ float KERNEL_DEVICE_CST[12544];
+__constant__ float KERNEL_DEVICE_CST[3136];
 
 __global__ void conv_forward_kernel_basic(float *output, const float *input, const float *mask, const int B, const int M, const int C, const int H, const int W, const int K,const int S)
 {
@@ -25,10 +25,11 @@ __global__ void conv_forward_kernel_basic(float *output, const float *input, con
     #define mask_4d(i3, i2, i1, i0) mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]                         // mask_4d(m, c, mask_heightindex, mask_widthindex)
     // Insert your GPU convolution kernel code here
     const int tile_width = blockDim.x;
+    const int tile_height = blockDim.y;
     const int W_grid_blocks = (W_out - 1) / tile_width + 1;  //tiles in outputWidth
     const int m_feature = blockIdx.x;
     const int b = blockIdx.z;
-    const int output_h = (blockIdx.y / W_grid_blocks) * tile_width + threadIdx.y;
+    const int output_h = (blockIdx.y / W_grid_blocks) * tile_height + threadIdx.y;
     const int output_w = (blockIdx.y % W_grid_blocks) * tile_width + threadIdx.x;
     // starting index for current Block
     const int input_h_start = output_h * S; 
@@ -76,10 +77,12 @@ __global__ void conv_forward_kernel_ConstantMem(float *output, const float *inpu
     #define mask_4d(i3, i2, i1, i0) KERNEL_DEVICE_CST[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]                         // mask_4d(m, c, mask_heightindex, mask_widthindex)
     // Insert your GPU convolution kernel code here
     const int tile_width = blockDim.x;
+    const int tile_height = blockDim.y;
+
     const int W_grid_blocks = (W_out - 1) / tile_width + 1;  //tiles in outputWidth
     const int m_feature = blockIdx.x;
     const int b = blockIdx.z;
-    const int output_h = (blockIdx.y / W_grid_blocks) * tile_width + threadIdx.y;
+    const int output_h = (blockIdx.y / W_grid_blocks) * tile_height + threadIdx.y;
     const int output_w = (blockIdx.y % W_grid_blocks) * tile_width + threadIdx.x;
     // starting index for current Block
     const int input_h_start = output_h * S; 
@@ -126,10 +129,11 @@ __global__ void conv_forward_kernel_ConstantMem_bigstride(float *output, const f
     #define mask_4d(i3, i2, i1, i0) KERNEL_DEVICE_CST[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]                         // mask_4d(m, c, mask_heightindex, mask_widthindex)
     // Insert your GPU convolution kernel code here
     const int tile_width = blockDim.x;
+    const int tile_height = blockDim.y;
     const int W_grid_blocks = (W_out - 1) / tile_width + 1;  //tiles in outputWidth
     const int m_feature = blockIdx.x;
     const int b = blockIdx.z;
-    const int output_h = (blockIdx.y / W_grid_blocks) * tile_width + threadIdx.y;
+    const int output_h = (blockIdx.y / W_grid_blocks) * tile_height + threadIdx.y;
     const int output_w = (blockIdx.y % W_grid_blocks) * tile_width + threadIdx.x;
     // starting index for current Block
     const int input_h_start = output_h * S; 
@@ -184,10 +188,10 @@ __global__ void conv_forward_kernel_ConstantMem_SharedMem(float *output, const f
     const int m_feature = blockIdx.x;
     const int b = blockIdx.z;
     // y and x indexes for the output matrix
-    const int output_h = (blockIdx.y / W_grid_blocks) * tile_width + threadIdx.y;
+    const int output_h = (blockIdx.y / W_grid_blocks) * tile_height + threadIdx.y;
     const int output_w = (blockIdx.y % W_grid_blocks) * tile_width + threadIdx.x;
     // corresponding y and x starting indexes for input matrix for the current block 
-    const int input_y_Block_start = ((blockIdx.y / W_grid_blocks) * tile_width) * S; 
+    const int input_y_Block_start = ((blockIdx.y / W_grid_blocks) * tile_height) * S; 
     const int input_x_Block_start = ((blockIdx.y % W_grid_blocks) * tile_width) * S;
     int input_x;// input-x index
     int input_y;// input-y index
@@ -195,21 +199,20 @@ __global__ void conv_forward_kernel_ConstantMem_SharedMem(float *output, const f
     int shared_y;// shared-y index
     // starting index for current Block
     //load Shared Memory
-    for (int scounterx = 0; scounterx < S; ++scounterx){
-        for (int scountery = 0; scountery < S; ++scountery){
-            input_x = input_x_Block_start + threadIdx.x + scounterx * tile_width;
-            input_y = input_y_Block_start + threadIdx.y + scountery * tile_height;
+    for(int c = 0; c < C; ++c){
+        for (int scounterx = 0; scounterx < S; ++scounterx){
             shared_x = threadIdx.x + scounterx * tile_width;
-            shared_y = threadIdx.y + scountery * tile_height; 
-            if((input_y < H) && (input_x < W)){
-                for(int c = 0; c < C; ++c){
-                    in_4d_shared(c, shared_y, shared_x) = in_4d_global(b, c, input_y, input_x);
-                }
-            }
-            else {
-                for(int c = 0; c < C; ++c){
+            input_x = input_x_Block_start + shared_x;
+            for (int scountery = 0; scountery < S; ++scountery){
+                shared_y = threadIdx.y + scountery * tile_height;
+                input_y = input_y_Block_start + shared_y;
+                //INDEXING OVER C in the outermost layer, to not mess up the coalescedd memory acces
+                if((input_y > H) && (input_x > W)){
                     in_4d_shared(c, shared_y, shared_x) = 0.0f;
                 }
+                else {
+                    in_4d_shared(c, shared_y, shared_x) = in_4d_global(b, c, input_y, input_x);
+                }  
             }
         }
     }
@@ -225,7 +228,7 @@ __global__ void conv_forward_kernel_ConstantMem_SharedMem(float *output, const f
                 for(int i = 0; i < K; ++i){   // KxK filter (width)
                     input_x = input_w_start + i;
                     shared_x = input_x - input_x_Block_start; //where it is in corresponding input tile, we use this to determine if its in shared mem or not.
-                    if((shared_x<SharedMatrix_width) && (shared_y<SharedMatrix_height)){
+                    if((shared_y<SharedMatrix_height) && (shared_x<SharedMatrix_width)){
                         acc += in_4d_shared(c, shared_y, shared_x) * mask_4d(m_feature, c, j, i); 
                     }
                     else{
@@ -240,17 +243,18 @@ __global__ void conv_forward_kernel_ConstantMem_SharedMem(float *output, const f
     #undef in_4d_global
     #undef mask_4d
 }
+
 __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, const float *host_input, const float *host_mask, float **device_output_ptr, float **device_input_ptr, float **device_mask_ptr, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
     // Allocate memory and copy over the relevant data structures to the GPU
     const int memSizeInput = (B * C * H * W) * sizeof(float);
-    const int kernelElements = (M * C * K * K);
-    const int memSizeMask = kernelElements * sizeof(float);
-    std::cout << "The value of memSizeMask is: " << memSizeMask << std::endl;
+    const int memSizeMask = (M * C * K * K) * sizeof(float);
+    // std::cout << "The value of memSizeMask is: " << memSizeMask << std::endl;
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
     const int memSizeOutput = (B * M * outputHeight * outputWidth) * sizeof(float);
-    std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S <<std::endl;
+    // std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S <<std::endl;
+    // std::cout << "output height is:  " << outputHeight << "output width is: " << outputWidth << "Channel is: " << C << "stride  is: " << S << std::endl;
 
     // We pass double pointers for you to initialize the relevant device pointers,
     //  which are passed to the other two functions.
@@ -259,7 +263,8 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMalloc((void **)device_output_ptr, memSizeOutput);
     cudaMemcpy(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice);
     cudaMemcpy(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);                 //copy mask to constant Memory
+    cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);
+
 
     // get_device_properties();
     // // Useful snippet for error checking
@@ -275,20 +280,31 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
     // Set the kernel dimensions and call the kernel
+    const int memSizeMask = (M * C * K * K) * sizeof(float);
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
-    #define TILE_WIDTH 16
-    const int H_grid_blocks = (outputHeight - 1) / TILE_WIDTH + 1; //tiles in outputHeight
-    const int W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
-    const int nTiles = H_grid_blocks * W_grid_blocks; // total tiles
-    dim3 dimBlock(TILE_WIDTH, TILE_WIDTH, 1);
+    int TILE_WIDTH = 6;
+    int TILE_HEIGHT = 48;
+    int H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
+    int W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
+    int nTiles = H_grid_blocks * W_grid_blocks; // total tiles
+    int sharedMemConvSize = (TILE_WIDTH * TILE_HEIGHT * S * S * C) * sizeof(float);
+    while (sharedMemConvSize > 49152){
+        TILE_HEIGHT /= 2;
+        // W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;
+        H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
+        nTiles = H_grid_blocks * W_grid_blocks; // total tiles
+        sharedMemConvSize = (TILE_WIDTH * TILE_HEIGHT * S * S * C) * sizeof(float);
+        std::cout<<"REsizing _________"<<std::endl;
+    }
+    dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
     dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
-    const int sharedMemConvSize = (TILE_WIDTH * TILE_WIDTH * S * S * C) * sizeof(float);
-    std::cout << "The memsize of sharedELementMatrix is: " << sharedMemConvSize << std::endl;
-    // max size is 49152
+    // std::cout << "The memsize of sharedELementMatrix is: " << sharedMemConvSize << std::endl;     // max size is 49152
+
     if(S>=K){
-        conv_forward_kernel_ConstantMem_bigstride<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
-        std::cout<<"BIGGSTRIDE"<<std::endl;
+        // conv_forward_kernel_ConstantMem_bigstride<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
+        conv_forward_kernel_ConstantMem_SharedMem<<<dimGrid, dimBlock, sharedMemConvSize>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
+        // std::cout<<"BIGGSTRIDE"<<std::endl;
     }
     else{
         // conv_forward_kernel_basic<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
