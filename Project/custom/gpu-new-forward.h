@@ -1,6 +1,7 @@
 #ifndef SRC_LAYER_GPU_NEW_FORWARD_H
 #define SRC_LAYER_GPU_NEW_FORWARD_H
 
+extern cudaStream_t stream1;
 class GPUInterface
 {
     public:
