@@ -73,8 +73,8 @@ __global__ void conv_forward_kernel_basic_16FP(half *output, const half *input, 
     const int H_out = (H - K)/S + 1;
     const int W_out = (W - K)/S + 1;
     #define out_4d(i3, i2, i1, i0) output[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]    // out_4d(b, m, h, w)
-    #define in_4d_global(i3, i2, i1, i0) __half2float(input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0])     // in_4d(b, c, cell_height, cell_width)
-    #define mask_4d(i3, i2, i1, i0) __half2float(mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0])                         // mask_4d(m, c, mask_heightindex, mask_widthindex)
+    #define in_4d_global(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]     // in_4d(b, c, cell_height, cell_width)
+    #define mask_4d(i3, i2, i1, i0) mask[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]                         // mask_4d(m, c, mask_heightindex, mask_widthindex)
     // Insert your GPU convolution kernel code here
     const int tile_width = blockDim.x;
     const int tile_height = blockDim.y;
@@ -88,14 +88,15 @@ __global__ void conv_forward_kernel_basic_16FP(half *output, const half *input, 
     const int input_w_start = output_w * S;
     int input_x;// input-x index
     int input_y;// input-y index
-    half acc = 0.0f;
+    half acc = __float2half(0.0f);
     if((output_h < H_out) && (output_w < W_out)){
         for(int c = 0; c < C; ++c){   // sum over all input channels
             for(int j = 0; j < K; ++j){   // KxK filter (height)
                 input_y = input_h_start + j;
                 for(int i = 0; i < K; ++i){   // KxK filter (width)
                     input_x = input_w_start + i;
-                    acc += in_4d_global(b, c, input_y, input_x) * mask_4d(m_feature, c, j, i); 
+                    acc = __hadd(acc, __hmul(in_4d_global(b, c, input_y, input_x), mask_4d(m_feature, c, j, i)));
+                    // acc = __hfma2(in_4d_global(b, c, input_y, input_x), mask_4d(m_feature, c, j, i), acc);
                 }
             }
         }
@@ -311,6 +312,13 @@ __host__ void convertFp16ToFp32(float* output, half* input, const int size) {
     }
 }
 
+__host__ void convertFp16ToFp32Inplace(float* output, half* input, const int size) {
+    // Start from the end of the input array and move backwards
+    for (int i = size - 1; i >= 0; i--) {
+        // Convert and store in output array, also traversing backwards
+        output[i] = __half2float(input[i]);
+    }
+}
 
 __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, const float *host_input, const float *host_mask, float **device_output_ptr, float **device_input_ptr, float **device_mask_ptr, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
@@ -383,7 +391,8 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     const half* deviceInputHalf = reinterpret_cast<const half*>(device_input);
     const half* device_maskHalf = reinterpret_cast<const half*>(device_mask);
     half* device_outputHalf = reinterpret_cast<half*>(device_output);
-    conv_forward_kernel_basic<<<dimGrid, dimBlock>>>(device_outputHalf, deviceInputHalf, device_maskHalf, B, M, C, H, W, K, S);
+    // conv_forward_kernel_basic<<<dimGrid, dimBlock>>>(device_outputHalf, deviceInputHalf, device_maskHalf, B, M, C, H, W, K, S);
+    conv_forward_kernel_basic_16FP<<<dimGrid, dimBlock>>>(device_outputHalf, deviceInputHalf, device_maskHalf, B, M, C, H, W, K, S);
 }
 
 __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *device_output, float *device_input, float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
