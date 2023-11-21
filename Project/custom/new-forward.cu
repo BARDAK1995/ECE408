@@ -225,7 +225,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     cudaMalloc((void **)&device_input_half, memSizeInput_half);
     cudaMalloc((void **)&device_mask_half, memSizeMaskHalf);
     const int blockSizeFP16Converter = 128;
-    const int blockSizeFP16mask = 64;
+    const int blockSizeFP16mask = 32;
     const int gridSizeFP16ConverterInput = (nInputElements + blockSizeFP16Converter - 1) / blockSizeFP16Converter;
     const int gridSizeFP16ConverterMask = (mMaskElements + blockSizeFP16Converter - 1) / blockSizeFP16mask;
     convertFloatToHalf<<<gridSizeFP16ConverterMask, blockSizeFP16mask, 0, stream1>>>(device_mask_half, device_mask, mMaskElements);
