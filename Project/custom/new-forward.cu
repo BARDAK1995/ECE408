@@ -171,20 +171,6 @@ __global__ void convertFloatToHalf(half __restrict__ *output, const float* __res
         output[idx] = __float2half(input[idx]);
     }
 }
-__global__ void convertFloatToHalf(half* __restrict__ output, const float* __restrict__ input, const int numElements) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = gridDim.x * blockDim.x;
-
-    for (int i = idx * 2; i < numElements; i += stride * 2) {
-        if (i < numElements) {
-            output[i] = __float2half(input[i]);
-        }
-        if (i + 1 < numElements) {
-            output[i + 1] = __float2half(input[i + 1]);
-        }
-    }
-}
-
 
 __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, const float *host_input, const float *host_mask, float **device_output_ptr, float **device_input_ptr, float **device_mask_ptr, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
@@ -294,7 +280,7 @@ __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *d
     const int memSizeOutput = nOutputElements * sizeof(float);
     cudaStreamSynchronize(stream1);
     cudaMemcpyAsync(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost, stream1);
-    cudaHostUnregister(host_output);
+    // cudaHostUnregister(host_output);
     
     // auto start4 = std::chrono::high_resolution_clock::now();
     // cudaMemcpy(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost);
