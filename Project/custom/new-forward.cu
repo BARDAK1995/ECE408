@@ -177,9 +177,9 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaStreamCreate(&stream1);
     // Allocate memory and copy over the relevant data structures to the GPU
     const int nInputElements = (B * C * H * W);
-    const int memSizeInput = nInputElements * sizeof(float);
+    const int memSizeInput = nInputElements * sizeof(float)* 1.5; //because it will also house the halfMask at the end
     const int mMaskElements = (M * C * K * K);
-    const int memSizeMask = mMaskElements * sizeof(float);
+    const int memSizeMask = mMaskElements * sizeof(float) * 1.5; //because it will also house the halfMask at the end
     // std::cout << mMaskElements << "   n mask elements " << std::endl;
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
@@ -216,21 +216,22 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     const int mMaskElements = (M * C * K * K);
     const int memSizeMask = mMaskElements * sizeof(float);
     const int memSizeMaskHalf = mMaskElements * sizeof(half);
-
-    half *device_input_half;
-    half *device_mask_half;
     const int nInputElements = (B * C * H * W);
-    const int memSizeInput_half = nInputElements * sizeof(half);
+    // const int memSizeInput_half = nInputElements * sizeof(half);
+    
+    half *device_mask_half_ptr = reinterpret_cast<half*>(const_cast<float*>(device_mask)) + 2*mMaskElements;
+    half *device_input_half_ptr = reinterpret_cast<half*>(const_cast<float*>(device_input)) + 2*nInputElements;
 
-    cudaMalloc((void **)&device_input_half, memSizeInput_half);
-    cudaMalloc((void **)&device_mask_half, memSizeMaskHalf);
+    // cudaMalloc((void **)&device_input_half, memSizeInput_half);
+    // cudaMalloc((void **)&device_mask_half, memSizeMaskHalf);
     const int blockSizeFP16Converter = 128;
     const int blockSizeFP16mask = 32;
     const int gridSizeFP16ConverterInput = (nInputElements + blockSizeFP16Converter - 1) / blockSizeFP16Converter;
     const int gridSizeFP16ConverterMask = (mMaskElements + blockSizeFP16Converter - 1) / blockSizeFP16mask;
-    convertFloatToHalf<<<gridSizeFP16ConverterMask, blockSizeFP16mask, 0, stream1>>>(device_mask_half, device_mask, mMaskElements);
-    cudaMemcpyToSymbol(KERNEL_DEVICE_CST, device_mask_half, memSizeMaskHalf);
-    convertFloatToHalf<<<gridSizeFP16ConverterInput, blockSizeFP16Converter, 0, stream1>>>(device_input_half, device_input, nInputElements);
+
+    convertFloatToHalf<<<gridSizeFP16ConverterMask, blockSizeFP16mask, 0, stream1>>>(device_mask_half_ptr, device_mask, mMaskElements);
+    cudaMemcpyToSymbol(KERNEL_DEVICE_CST, device_mask_half_ptr, memSizeMaskHalf);
+    convertFloatToHalf<<<gridSizeFP16ConverterInput, blockSizeFP16Converter, 0, stream1>>>(device_input_half_ptr, device_input, nInputElements);
 
     
     const int outputHeight = (H - K)/S + 1;
@@ -262,10 +263,10 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
     // cudaStreamSynchronize(stream1);
     if(K==7){
-        conv_forward_kernel_basic_16FP_convLayerK7_CnstMask<<<dimGrid, dimBlock, 0, stream1>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
+        conv_forward_kernel_basic_16FP_convLayerK7_CnstMask<<<dimGrid, dimBlock, 0, stream1>>>(device_output, device_input_half_ptr, device_mask_half_ptr, B, M, C, H, W, K, S);
     }
     else{
-        conv_forward_kernel_basic_16FP<<<dimGrid, dimBlock, 0 , stream1>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
+        conv_forward_kernel_basic_16FP<<<dimGrid, dimBlock, 0 , stream1>>>(device_output, device_input_half_ptr, device_mask_half_ptr, B, M, C, H, W, K, S);
     }
 }
 
