@@ -188,11 +188,11 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     
     // cudaStreamCreate(&stream2);
     cudaMalloc((void **)device_input_ptr, memSizeInput);
-    cudaMalloc((void **)device_output_ptr, memSizeOutput);
     cudaMalloc((void **)device_mask_ptr, memSizeMask);
     // cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);
     cudaMemcpyAsync(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice, stream1);
     cudaMemcpyAsync(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice, stream1);
+    cudaMalloc((void **)device_output_ptr, memSizeOutput);
     // std::cout<<"mMaskElements: "<<mMaskElements<<std::endl;
     // auto start6 = std::chrono::high_resolution_clock::now();
     // cudaHostRegister(const_cast<float*>(host_output), memSizeOutput, cudaHostRegisterDefault);
@@ -260,6 +260,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     // }
     dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
     dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
+    cudaStreamSynchronize(stream1);
     if(K==7){
         conv_forward_kernel_basic_16FP_convLayerK7_CnstMask<<<dimGrid, dimBlock, 0, stream1>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
     }
