@@ -277,7 +277,7 @@ __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *d
     const int nOutputElements = (B * M * outputHeight * outputWidth);
     const int memSizeOutput = nOutputElements * sizeof(float);
     cudaHostRegister(host_output, memSizeOutput, cudaHostRegisterDefault);
-    // cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(stream1);
     cudaMemcpyAsync(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost);
     cudaHostUnregister(host_output);
     
