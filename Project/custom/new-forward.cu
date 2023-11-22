@@ -221,13 +221,10 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     // }
 }
 
-
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
     // Set the kernel dimensions and call the kernel
     const int mMaskElements = (M * C * K * K);
-    const int memSizeMask = mMaskElements * sizeof(float);
-    const int memSizeMaskHalf = mMaskElements * sizeof(half);
     const int nInputElements = (B * C * H * W);
     //since we are using the same array for storing fp32 and corresponding fp16,
     //these pointers point to where the fp16 portion STARTS
@@ -236,7 +233,6 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
 
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
-    // std::cout << outputWidth << " x " << outputHeight << " x " << C << " and K is " << K << " and S is " << S << std::endl;
     int TILE_WIDTH = 6;
     int TILE_HEIGHT = 48;
     if(outputWidth==80){
@@ -279,7 +275,7 @@ __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *d
     const int memSizeOutput = nOutputElements * sizeof(float);
     cudaStreamSynchronize(stream1);
     cudaMemcpyAsync(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost, stream1);
-    cudaHostUnregister(host_output);
+    // cudaHostUnregister(host_output);
 
     // auto start4 = std::chrono::high_resolution_clock::now();
     // cudaMemcpy(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost);
