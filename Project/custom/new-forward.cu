@@ -189,10 +189,12 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     // cudaStreamCreate(&stream2);
     cudaMalloc((void **)device_input_ptr, memSizeInput);
     cudaMalloc((void **)device_mask_ptr, memSizeMask);
+    cudaMalloc((void **)device_output_ptr, memSizeOutput);
     // cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);
     cudaMemcpyAsync(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice, stream1);
     cudaMemcpyAsync(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice, stream1);
-    cudaMalloc((void **)device_output_ptr, memSizeOutput);
+    cudaHostRegister(const_cast<float*>(host_output), memSizeOutput, cudaHostRegisterDefault);
+
     // std::cout<<"mMaskElements: "<<mMaskElements<<std::endl;
     // auto start6 = std::chrono::high_resolution_clock::now();
     // cudaHostRegister(const_cast<float*>(host_output), memSizeOutput, cudaHostRegisterDefault);
@@ -230,9 +232,8 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     const int gridSizeFP16ConverterMask = (mMaskElements + blockSizeFP16Converter - 1) / blockSizeFP16mask;
 
     convertFloatToHalf<<<gridSizeFP16ConverterMask, blockSizeFP16mask, 0, stream1>>>(device_mask_half_ptr, device_mask, mMaskElements);
-    cudaMemcpyToSymbol(KERNEL_DEVICE_CST, device_mask_half_ptr, memSizeMaskHalf);
     convertFloatToHalf<<<gridSizeFP16ConverterInput, blockSizeFP16Converter, 0, stream1>>>(device_input_half_ptr, device_input, nInputElements);
-
+    cudaMemcpyToSymbol(KERNEL_DEVICE_CST, device_mask_half_ptr, memSizeMaskHalf);
     
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
@@ -261,7 +262,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     // }
     dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
     dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
-    // cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(stream1);
     if(K==7){
         conv_forward_kernel_basic_16FP_convLayerK7_CnstMask<<<dimGrid, dimBlock, 0, stream1>>>(device_output, device_input_half_ptr, device_mask_half_ptr, B, M, C, H, W, K, S);
     }
@@ -277,9 +278,8 @@ __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *d
     const int outputWidth = (W - K)/S + 1;
     const int nOutputElements = (B * M * outputHeight * outputWidth);
     const int memSizeOutput = nOutputElements * sizeof(float);
-    cudaHostRegister(host_output, memSizeOutput, cudaHostRegisterDefault);
     cudaStreamSynchronize(stream1);
-    cudaMemcpyAsync(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost, stream1);
     cudaHostUnregister(host_output);
     
     // auto start4 = std::chrono::high_resolution_clock::now();
