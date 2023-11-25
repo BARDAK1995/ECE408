@@ -6,45 +6,6 @@
 cudaStream_t stream1;
 __constant__ half KERNEL_DEVICE_CST[3136];
 
-
-__global__ void unroll_Kernel(half *outputUnrolled, const half *inputX, const int B, const int C, const int H, const int W, const int K,const int S) {
-    const int H_out = H - K + 1;
-    const int W_out = W - K + 1; 
-    const int WIDTH_unroll = H_out * W_out;
-    const int HIGHT_unroll = C * K * K;
-    #define in_4d_global(i3, i2, i1, i0) inputX[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]     // in_4d(b, c, cell_height, cell_width)
-    #define out_3d_UNROLL(i2, i1, i0) outputUnrolled[(i2) * (HIGHT_unroll * WIDTH_unroll) + (i1) * (WIDTH_unroll) + i0]     // outputUnrolles(b, cell_height, cell_width)
-    const int batchN = blockIdx.y;
-    const int thread = blockIdx.x * blockDim.x + threadIdx.x;
-    // Width of the unrolled input feature matrix
-    if (thread < C * WIDTH_unroll) {
-        // Channel of the input feature map being collected by the thread
-        const int c = thread / WIDTH_unroll; 
-        // Column index of the unrolled matrix to write a strip of
-        // input elements into (also, the linearized index of the output
-        // element for which the thread is collecting input elements)
-        const int x_unroll = thread % WIDTH_unroll;
-        // Horizontal and vertical indices of the output element
-        const int h_out = x_unroll / W_out;
-        const int w_out = x_unroll % W_out;
-        // Starting row index for the unrolled matrix section for channel c
-        const int w_base = c * K * K;
-        for(int p = 0; p < K; p++) {
-            for(int q = 0; q < K; q++) {
-                // Row index of the unrolled matrix for the thread to write
-                // the input element into for the current iteration
-                const int y_unroll = w_base + p*K + q;
-                // Compute linearized indices for X and X_unroll
-                const int input_x = w_out + q;
-                const int input_y = h_out + p;
-                out_3d_UNROLL(batchN, y_unroll, x_unroll) = in_4d_global(batchN, c, input_y, input_x);
-            }
-        }
-    }
-    #undef in_4d_global
-}
-
-
 // __global__ void conv_forward_kernel_basic(float *output, const float *input, const float *mask, const int B, const int M, const int C, const int H, const int W, const int K,const int S)
 // {
 //     /*
@@ -222,24 +183,11 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     const int memSizeInput = nInputElements * sizeof(float);
     const int mMaskElements = (M * C * K * K);
     const int memSizeMask = mMaskElements * sizeof(float);
-    std::cout <<"Hin =" << H << "Win = " << W << "batch =" << B << "Chanelinput =" << C << std::endl;
-    std::cout <<"H out =" << outputHeight << "Wout = " << outputWidth << "output features =" << M << "Kernelsize =" << K << std::endl;
+    // std::cout << mMaskElements << "   n mask elements " << std::endl;
     //OutputSizes
     const int nOutputElements = (B * M * outputHeight * outputWidth);
     const int memSizeOutput = nOutputElements * sizeof(float);
 
-
-    // std::cout << mMaskElements << "   n mask elements " << std::endl;
-    //Unrolled X matrix 
-    const int unrolledMatrixSize = B * C * K * K * outputHeight * outputWidth;
-    const int memSizeunrolledX = unrolledMatrixSize * sizeof(half);
-    std::cout <<"MATRIX SIZE is =" << outputHeight <<  std::endl;
-    half *device_UnrolledX;
-
-
-
-
-    cudaMalloc((void **)&device_UnrolledX, memSizeunrolledX);
     cudaMalloc((void **)device_input_ptr, memSizeInput);
     cudaMalloc((void **)device_mask_ptr, memSizeMask);
     // cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);
@@ -252,7 +200,7 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     // auto stop6 = std::chrono::high_resolution_clock::now();
     // std::chrono::duration<double> duration6 = stop6 - start6;
     // std::cout << "Output memory Pinning took " << duration6.count()*1000 << " ms" << std::endl;
-    get_device_properties();
+    // get_device_properties();
     // // Useful snippet for error checking
     // cudaError_t error = cudaGetLastError();
     // if(error != cudaSuccess)
@@ -284,13 +232,13 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     convertFloatToHalf<<<gridSizeFP16ConverterMask, blockSizeFP16mask, 0, stream1>>>(device_mask_half, device_mask, mMaskElements);
     cudaMemcpyToSymbol(KERNEL_DEVICE_CST, device_mask_half, memSizeMaskHalf);
     convertFloatToHalf<<<gridSizeFP16ConverterInput, blockSizeFP16Converter, 0, stream1>>>(device_input_half, device_input, nInputElements);
-    
+
     
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
     //Pointers to acces the fp16 portion of the arrays
     half *device_mask_half_ptr = reinterpret_cast<half*>(const_cast<float*>(device_mask)) + 2*mMaskElements;
-    half *device_input_half_ptr = reinterpret_cast<half*>(const_cast<float*>(device_input)) + 2*nInputElements;
+    half *device_input_half_ptr = reinterpret_cast<half*>(const_cast<float*>(device_input)) + 2*nInputElements;\
     // std::cout << outputWidth << " x " << outputHeight << " x " << C << " and K is " << K << " and S is " << S << std::endl;
     int TILE_WIDTH = 6;
     int TILE_HEIGHT = 48;
