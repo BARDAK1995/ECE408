@@ -7,12 +7,19 @@ cudaStream_t stream1;
 __constant__ half KERNEL_DEVICE_CST[3136];
 // #define TILE_WIDTH 32
 
-// __global__ void matrixMultiplyShared(float *A, float *B, float *C, const int B, const int M, const int C, const int H, const int W, const int K,const int S) {
-//   //@@ Insert code to implement matrix multiplication here
-// //   __shared__ float tileA[TILE_WIDTH][TILE_WIDTH];
+// __global__ void matrixMultiplyShared(float *OUTPUT_C, half *B_Matrix, const int B, const int M, const int C, const int H, const int W, const int K,const int S) {
+//     __shared__ float tileB[C*K*K][TILE_WIDTH];
 //     const int H_out = (H - K)/S + 1;
 //     const int W_out = (W - K)/S + 1;
-//     __shared__ float tileB[C*K*K][TILE_WIDTH];
+//     const int WIDTH_unroll = H_out * W_out;
+//     const int HIGHT_unroll = C * K * K;
+//     #define A_2d(i1, i0) (KERNEL_DEVICE_CST[(i1) * (C*K*K) + i0]) // mask_4d(m, c, mask_heightindex, mask_widthindex) = mask_4d(m=y, x)
+//     #define B_3d_shared(i1, i0) tileB[ (i1) * (WIDTH_unroll) + i0]     // outputUnrolles(b, cell_height, cell_width)
+//     #define C_4d(i3, i2, i1) OUTPUT_C[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1)]    // out_4d(b, m, h, w)
+    
+//     const int H_out = (H - K)/S + 1;
+//     const int W_out = (W - K)/S + 1;
+    
 //     const int width = C*K*K; //numAColumns;
 //     const int TILE_depth = C*K*K; //TILE_depth;
 
@@ -28,31 +35,27 @@ __constant__ half KERNEL_DEVICE_CST[3136];
 //     const int row_Y = blocky * blockIdx.y + threadIdx.y;
 
 //     float Cvalue = 0.0f;
-//     const int n_tiles = ceil(width/(float)TILE_depth); /// is 1
+//     const int tileMultiplier = ceil((C*K*K)/(float)(M)); /// each thread may need to put multiple global mem locations to shared
 //     //Only 1 tile since we scann over constant 
-//     for (int tileNo = 0; tileNo < n_tiles; tileNo++){
-//         // load tile to shared memory
-//         // For B
+//     for (int tileNo = 0; tileNo < tileMultiplier; tileNo++){
+//         // load tile to shared memory For B
 //         if ((column_X < Bdepth) && ((ty + tileNo * TILE_WIDTH) < width))
 //             tileB[ty][tx] = B[column_X + (ty * Bdepth) + (tileNo * Bdepth * TILE_WIDTH)];
 //         else tileB[ty][tx] = 0.0f;
-//         __syncthreads();
-//         // calculate partial multiplication result for this tile 
-//         for (int k = 0; k < TILE_depth; k++)
-//             Cvalue += KERNEL_DEVICE_CST[ty][k] * tileB[k][tx];
-//         __syncthreads();
 //     }
+//     __syncthreads();
+//     // calculate partial multiplication result for this tile 
+//     for (int k = 0; k < TILE_depth; k++){
+//         const half a = A_2d(row_m_feature,i);
+//         const half b = B_3d_shared(i,columnx_outputElement);
+//         Cvalue += KERNEL_DEVICE_CST[ty][k] * tileB[k][tx];
+//     }
+        
+//     __syncthreads();
 //     //   put the correct summed up multiplication result
 //     if ((row_Y < numARows) && (column_X < numBColumns))
 //         C[row_Y*numCColumns + column_X] = Cvalue;
 // }
-
-void convertHalfArrayToFloat( float* floatArray, const __half* halfArray, size_t n){
-    // Ensure you have called cudaSetDevice() before this function if necessary
-    for (size_t i = 0; i < n; ++i) {
-        floatArray[i] = __half2float(halfArray[i]);
-    }
-}
 
 __global__ void matrixMultiply(float *OUTPUT_C, half *B_Matrix, const int B, const int M, const int C, const int H, const int W, const int K,const int S) {
 
@@ -282,13 +285,14 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     cudaStreamSynchronize(stream1);
     matrixMultiply<<<DimGridMATRIX, DimBlockMATRIX,0,stream1>>>(device_output, device_UnrolledX, B, M, C, H, W, K, S);
 
-    //for shared tiled matrix multiplyu
-    // int grid_blocks_X = (Matmul_Output_width - 1) / 32 + 1; //tiles in outputHeight
-    // int grid_blocks_Y = (Matmul_Output_width - 1) / M + 1; //tiles in outputHeight should be 1
+    // //for shared tiled matrix multiplyu
+    // grid_blocks_X = (Matmul_Output_width - 1) / 32 + 1; //tiles in outputHeight
+    // grid_blocks_Y = (Matmul_Output_width - 1) / M + 1; //tiles in outputHeight should be 1
     // dim3 DimBlock(32, M, 1);
     // dim3 DimGrid(gridXdim, gridYdim, B);
-    //@@ Launch the GPU Kernel here
-    // matrixMultiplyShared<<<DimGrid, DimBlock>>>(deviceA, deviceB, deviceC, numARows, numAColumns, numBRows, numBColumns, numCRows, numCColumns);
+    // const int sharedMatmulBsize = C*K*K*32;
+    // //@@ Launch the GPU Kernel here
+    // matrixMultiplyShared<<<DimGridMATRIX, DimBlockMATRIX,sharedMatmulBsize,stream1>>>(device_output, device_UnrolledX, B, M, C, H, W, K, S);
 
     cudaFree(device_UnrolledX);
     cudaFree(device_input_half);
