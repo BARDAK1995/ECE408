@@ -70,10 +70,9 @@ __global__ void conv_forward_kernel_constant_16FP_C1(float* __restrict__ output,
     */
     const int H_out = (H - K)/S + 1;
     const int W_out = (W - K)/S + 1;
-
     #define out_4d(i3, i2, i1, i0) output[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]    // out_4d(b, m, h, w)
-    #define in_4d_global(i3, i1, i0) (input[(i3) * (H * W) + (i1) * (W) + i0])     // in_4d(b, c=1, cell_height, cell_width)
-    #define mask_4d(i3, i1, i0) (KERNEL_DEVICE_CST[(i3) * (K * K) + (i1) * (K) + i0])                         // mask_4d(m, c=1, mask_heightindex, mask_widthindex)
+    #define in_4d_global(i3, i1, i0) (input[(i3) * (H * W) + (H * W) + (i1) * (W) + i0])     // in_4d(b, c=1, cell_height, cell_width)
+    #define mask_4d(i3, i1, i0) (KERNEL_DEVICE_CST[(i3) * (K * K) + (K * K) + (i1) * (K) + i0])                         // mask_4d(m, c=1, mask_heightindex, mask_widthindex)
     // Insert your GPU convolution kernel code here
     const int tile_width = blockDim.x;
     const int tile_height = blockDim.y;
@@ -89,67 +88,89 @@ __global__ void conv_forward_kernel_constant_16FP_C1(float* __restrict__ output,
     // int input_y;// input-y index
     float acc = 0.0f;
     if((output_h < H_out) && (output_w < W_out)){
-        acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 0), mask_4d(m_feature, 0, 0), acc);
-        acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 1), mask_4d(m_feature, 0, 1), acc);
-        acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 2), mask_4d(m_feature, 0, 2), acc);
-        acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 3), mask_4d(m_feature, 0, 3), acc);
-        acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 4), mask_4d(m_feature, 0, 4), acc);
-        acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 5), mask_4d(m_feature, 0, 5), acc);
-        acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 6), mask_4d(m_feature, 0, 6), acc);
-        // input_y = input_h_start + 1;  
-        acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 0), mask_4d(m_feature, 1, 0), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 1), mask_4d(m_feature, 1, 1), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 2), mask_4d(m_feature, 1, 2), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 3), mask_4d(m_feature, 1, 3), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 4), mask_4d(m_feature, 1, 4), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 5), mask_4d(m_feature, 1, 5), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 6), mask_4d(m_feature, 1, 6), acc);
+        // #pragma unroll 7
+        // for(int j = 0; j < K; ++j){   // KxK filter (height)
+        //     input_y = input_h_start + j;  
+        //     acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 0), mask_4d(m_feature, 0, j, 0), acc);
+        //     acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 1), mask_4d(m_feature, 0, j, 1), acc);
+        //     acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 2), mask_4d(m_feature, 0, j, 2), acc);
+        //     acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 3), mask_4d(m_feature, 0, j, 3), acc);
+        //     acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 4), mask_4d(m_feature, 0, j, 4), acc);
+        //     acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 5), mask_4d(m_feature, 0, j, 5), acc);
+        //     acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 6), mask_4d(m_feature, 0, j, 6), acc);
 
-        // input_y = input_h_start + 2;  
-        acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 0), mask_4d(m_feature, 2, 0), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 1), mask_4d(m_feature, 2, 1), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 2), mask_4d(m_feature, 2, 2), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 3), mask_4d(m_feature, 2, 3), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 4), mask_4d(m_feature, 2, 4), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 5), mask_4d(m_feature, 2, 5), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 6), mask_4d(m_feature, 2, 6), acc);
+            // input_y = input_h_start + j;  
+            // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 0), mask_4d(m_feature, 0, j, 0), acc);
+            // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 2), mask_4d(m_feature, 0, j, 2), acc);
+            // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 4), mask_4d(m_feature, 0, j, 4), acc);
+            // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 6), mask_4d(m_feature, 0, j, 6), acc);
+            
+            // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 1), mask_4d(m_feature, 0, j, 1), acc);
+            // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 3), mask_4d(m_feature, 0, j, 3), acc);
+            // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 5), mask_4d(m_feature, 0, j, 5), acc);
 
-        // input_y = input_h_start + 3;  
-        acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 0), mask_4d(m_feature, 3, 0), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 1), mask_4d(m_feature, 3, 1), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 2), mask_4d(m_feature, 3, 2), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 3), mask_4d(m_feature, 3, 3), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 4), mask_4d(m_feature, 3, 4), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 5), mask_4d(m_feature, 3, 5), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 6), mask_4d(m_feature, 3, 6), acc);
+            acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 0), mask_4d(m_feature, 0, 0), acc);
+            acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 1), mask_4d(m_feature, 0, 1), acc);
+            acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 2), mask_4d(m_feature, 0, 2), acc);
+            acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 3), mask_4d(m_feature, 0, 3), acc);
+            acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 4), mask_4d(m_feature, 0, 4), acc);
+            acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 5), mask_4d(m_feature, 0, 5), acc);
+            acc = __hfma(in_4d_global(b, input_h_start, input_w_start + 6), mask_4d(m_feature, 0, 6), acc);
+            // input_y = input_h_start + 1;  
+            acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 0), mask_4d(m_feature, 1, 0), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 1), mask_4d(m_feature, 1, 1), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 2), mask_4d(m_feature, 1, 2), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 3), mask_4d(m_feature, 1, 3), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 4), mask_4d(m_feature, 1, 4), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 5), mask_4d(m_feature, 1, 5), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 1, input_w_start + 6), mask_4d(m_feature, 1, 6), acc);
 
-        // input_y = input_h_start + 4;  
-        acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 0), mask_4d(m_feature, 4, 0), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 1), mask_4d(m_feature, 4, 1), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 2), mask_4d(m_feature, 4, 2), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 3), mask_4d(m_feature, 4, 3), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 4), mask_4d(m_feature, 4, 4), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 5), mask_4d(m_feature, 4, 5), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 6), mask_4d(m_feature, 4, 6), acc);
+            // input_y = input_h_start + 2;  
+            acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 0), mask_4d(m_feature, 2, 0), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 1), mask_4d(m_feature, 2, 1), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 2), mask_4d(m_feature, 2, 2), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 3), mask_4d(m_feature, 2, 3), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 4), mask_4d(m_feature, 2, 4), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 5), mask_4d(m_feature, 2, 5), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 2, input_w_start + 6), mask_4d(m_feature, 2, 6), acc);
 
-        // input_y = input_h_start + 5;  
-        acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 0), mask_4d(m_feature, 5, 0), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 1), mask_4d(m_feature, 5, 1), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 2), mask_4d(m_feature, 5, 2), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 3), mask_4d(m_feature, 5, 3), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 4), mask_4d(m_feature, 5, 4), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 5), mask_4d(m_feature, 5, 5), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 6), mask_4d(m_feature, 5, 6), acc);
+            // input_y = input_h_start + 3;  
+            acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 0), mask_4d(m_feature, 3, 0), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 1), mask_4d(m_feature, 3, 1), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 2), mask_4d(m_feature, 3, 2), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 3), mask_4d(m_feature, 3, 3), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 4), mask_4d(m_feature, 3, 4), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 5), mask_4d(m_feature, 3, 5), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 3, input_w_start + 6), mask_4d(m_feature, 3, 6), acc);
 
-        // input_y = input_h_start + 6;  
-        acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 0), mask_4d(m_feature, 6, 0), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 1), mask_4d(m_feature, 6, 1), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 2), mask_4d(m_feature, 6, 2), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 3), mask_4d(m_feature, 6, 3), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 4), mask_4d(m_feature, 6, 4), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 5), mask_4d(m_feature, 6, 5), acc);
-        acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 6), mask_4d(m_feature, 6, 6), acc);
+            // input_y = input_h_start + 4;  
+            acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 0), mask_4d(m_feature, 4, 0), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 1), mask_4d(m_feature, 4, 1), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 2), mask_4d(m_feature, 4, 2), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 3), mask_4d(m_feature, 4, 3), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 4), mask_4d(m_feature, 4, 4), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 5), mask_4d(m_feature, 4, 5), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 4, input_w_start + 6), mask_4d(m_feature, 4, 6), acc);
 
+            // input_y = input_h_start + 5;  
+            acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 0), mask_4d(m_feature, 5, 0), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 1), mask_4d(m_feature, 5, 1), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 2), mask_4d(m_feature, 5, 2), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 3), mask_4d(m_feature, 5, 3), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 4), mask_4d(m_feature, 5, 4), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 5), mask_4d(m_feature, 5, 5), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 5, input_w_start + 6), mask_4d(m_feature, 5, 6), acc);
+
+            // input_y = input_h_start + 6;  
+            acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 0), mask_4d(m_feature, 6, 0), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 1), mask_4d(m_feature, 6, 1), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 2), mask_4d(m_feature, 6, 2), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 3), mask_4d(m_feature, 6, 3), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 4), mask_4d(m_feature, 6, 4), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 5), mask_4d(m_feature, 6, 5), acc);
+            acc = __hfma(in_4d_global(b, input_h_start + 6, input_w_start + 6), mask_4d(m_feature, 6, 6), acc);
+
+        // }
         out_4d(b, m_feature, output_h, output_w) = acc;
     }
     #undef out_4d
@@ -192,6 +213,7 @@ __global__ void conv_forward_kernel_constant_16FP_C4(float* __restrict__ output,
     float acc = 0.0f;
     if((output_h < H_out) && (output_w < W_out)){
         for(int c = 0; c < C; ++c){   // sum over all input channels
+            // #pragma unroll 7
             for(int j = 0; j < K; ++j){   // KxK filter (height)
                 input_y = input_h_start + j;    
                 acc = __hfma(in_4d_global(b, c, input_y, input_w_start + 0), mask_4d(m_feature, c, j, 0), acc);
@@ -201,6 +223,38 @@ __global__ void conv_forward_kernel_constant_16FP_C4(float* __restrict__ output,
                 acc = __hfma(in_4d_global(b, c, input_y, input_w_start + 4), mask_4d(m_feature, c, j, 4), acc);
                 acc = __hfma(in_4d_global(b, c, input_y, input_w_start + 5), mask_4d(m_feature, c, j, 5), acc);
                 acc = __hfma(in_4d_global(b, c, input_y, input_w_start + 6), mask_4d(m_feature, c, j, 6), acc);
+
+                // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 0), mask_4d(m_feature, 0, j, 0), acc);
+                // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 1), mask_4d(m_feature, 0, j, 1), acc);
+                // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 2), mask_4d(m_feature, 0, j, 2), acc);
+                // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 3), mask_4d(m_feature, 0, j, 3), acc);
+                // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 4), mask_4d(m_feature, 0, j, 4), acc);
+                // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 5), mask_4d(m_feature, 0, j, 5), acc);
+                // acc = __hfma(in_4d_global(b, 0, input_y, input_w_start + 6), mask_4d(m_feature, 0, j, 6), acc);
+
+                // acc = __hfma(in_4d_global(b, 1, input_y, input_w_start + 0), mask_4d(m_feature, 1, j, 0), acc);
+                // acc = __hfma(in_4d_global(b, 1, input_y, input_w_start + 1), mask_4d(m_feature, 1, j, 1), acc);
+                // acc = __hfma(in_4d_global(b, 1, input_y, input_w_start + 2), mask_4d(m_feature, 1, j, 2), acc);
+                // acc = __hfma(in_4d_global(b, 1, input_y, input_w_start + 3), mask_4d(m_feature, 1, j, 3), acc);
+                // acc = __hfma(in_4d_global(b, 1, input_y, input_w_start + 4), mask_4d(m_feature, 1, j, 4), acc);
+                // acc = __hfma(in_4d_global(b, 1, input_y, input_w_start + 5), mask_4d(m_feature, 1, j, 5), acc);
+                // acc = __hfma(in_4d_global(b, 1, input_y, input_w_start + 6), mask_4d(m_feature, 1, j, 6), acc);
+
+                // acc = __hfma(in_4d_global(b, 2, input_y, input_w_start + 0), mask_4d(m_feature, 2, j, 0), acc);
+                // acc = __hfma(in_4d_global(b, 2, input_y, input_w_start + 1), mask_4d(m_feature, 2, j, 1), acc);
+                // acc = __hfma(in_4d_global(b, 2, input_y, input_w_start + 2), mask_4d(m_feature, 2, j, 2), acc);
+                // acc = __hfma(in_4d_global(b, 2, input_y, input_w_start + 3), mask_4d(m_feature, 2, j, 3), acc);
+                // acc = __hfma(in_4d_global(b, 2, input_y, input_w_start + 4), mask_4d(m_feature, 2, j, 4), acc);
+                // acc = __hfma(in_4d_global(b, 2, input_y, input_w_start + 5), mask_4d(m_feature, 2, j, 5), acc);
+                // acc = __hfma(in_4d_global(b, 2, input_y, input_w_start + 6), mask_4d(m_feature, 2, j, 6), acc);
+
+                // acc = __hfma(in_4d_global(b, 3, input_y, input_w_start + 0), mask_4d(m_feature, 3, j, 0), acc);
+                // acc = __hfma(in_4d_global(b, 3, input_y, input_w_start + 1), mask_4d(m_feature, 3, j, 1), acc);
+                // acc = __hfma(in_4d_global(b, 3, input_y, input_w_start + 2), mask_4d(m_feature, 3, j, 2), acc);
+                // acc = __hfma(in_4d_global(b, 3, input_y, input_w_start + 3), mask_4d(m_feature, 3, j, 3), acc);
+                // acc = __hfma(in_4d_global(b, 3, input_y, input_w_start + 4), mask_4d(m_feature, 3, j, 4), acc);
+                // acc = __hfma(in_4d_global(b, 3, input_y, input_w_start + 5), mask_4d(m_feature, 3, j, 5), acc);
+                // acc = __hfma(in_4d_global(b, 3, input_y, input_w_start + 6), mask_4d(m_feature, 3, j, 6), acc);
             }
         }
         out_4d(b, m_feature, output_h, output_w) = acc;
@@ -224,9 +278,14 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     // Allocate memory and copy over the relevant data structures to the GPU
     const int memSizeInput = (B * C * H * W) * sizeof(float);
     const int memSizeMask = (M * C * K * K) * sizeof(float);
+    // std::cout << "The value of memSizeMask is: " << memSizeMask << std::endl;
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
     const int memSizeOutput = (B * M * outputHeight * outputWidth) * sizeof(float);
+    // std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S <<std::endl;
+    // std::cout << "output height is:  " << outputHeight << "output width is: " << outputWidth << "Channel is: " << C << "stride  is: " << S << std::endl;
+    // std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S << "M  is: " << M <<std::endl;
+
     // We pass double pointers for you to initialize the relevant device pointers,
     //  which are passed to the other two functions.
     cudaMalloc((void **)device_input_ptr, memSizeInput);
@@ -234,6 +293,16 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMalloc((void **)device_output_ptr, memSizeOutput);
     cudaMemcpy(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice);
     cudaMemcpy(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice);
+
+    // cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);
+    // get_device_properties();
+    // // Useful snippet for error checking
+    // cudaError_t error = cudaGetLastError();
+    // if(error != cudaSuccess)
+    // {
+    //     std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
+    //     exit(-1);
+    // }
 }
 
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
@@ -256,6 +325,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     cudaMemcpyToSymbol(KERNEL_DEVICE_CST, device_mask_half, memSizeMaskHalf);
     convertFloatToHalf<<<gridSizeFP16ConverterInput, blockSizeFP16Converter>>>(device_input_half, device_input, nInputElements);
 
+
     //CONVOLUTION PART
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
@@ -277,14 +347,26 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
     int W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
     int nTiles = H_grid_blocks * W_grid_blocks; // total tiles
+
     dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
     dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
+    // cudaDeviceSynchronize();
+
+    // conv_forward_kernel_constant_16FP<<<dimGrid, dimBlock>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
+    // if(kernelFlag){
+    //     conv_forward_kernel_ConstantMemRestrict_Unroll<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
+    // }
+    // else{
+    //     conv_forward_kernel_ConstantMem<<<dimGrid, dimBlock>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
+    // }
     if(kernelFlag){
         if(C==1){
             conv_forward_kernel_constant_16FP_C1<<<dimGrid, dimBlock>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
+            std::cout << "C1"<<std::endl;
         }
         else{
             conv_forward_kernel_constant_16FP_C4<<<dimGrid, dimBlock>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
+            std::cout << C <<std::endl;
         }
     }
     else{
