@@ -6,9 +6,6 @@
 cudaStream_t stream1;
 __constant__ half KERNEL_DEVICE_CST[3136];
 #define TILE_WIDTH_MATMUL 64
-
-#define COARSE_FACTOR 2
-
 __global__ void matrixMultiplySharedFusion_unroll(float* __restrict__ OUTPUT_C, half* __restrict__ inputX, const int B, const int M, const int C, const int H, const int W, const int K, const int S) {
     extern __shared__ half tileAB[];  // Declaration of the shared memory array
     const int H_out = (H - K)/S + 1;

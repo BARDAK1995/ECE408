@@ -207,14 +207,9 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     // Allocate memory and copy over the relevant data structures to the GPU
     const int memSizeInput = (B * C * H * W) * sizeof(float);
     const int memSizeMask = (M * C * K * K) * sizeof(float);
-    // std::cout << "The value of memSizeMask is: " << memSizeMask << std::endl;
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
     const int memSizeOutput = (B * M * outputHeight * outputWidth) * sizeof(float);
-    // std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S <<std::endl;
-    // std::cout << "output height is:  " << outputHeight << "output width is: " << outputWidth << "Channel is: " << C << "stride  is: " << S << std::endl;
-    // std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S << "M  is: " << M <<std::endl;
-
     // We pass double pointers for you to initialize the relevant device pointers,
     //  which are passed to the other two functions.
     cudaMalloc((void **)device_input_ptr, memSizeInput);
@@ -223,21 +218,12 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMemcpy(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice);
     cudaMemcpy(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice);
     cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);
-    // get_device_properties();
-    // // Useful snippet for error checking
-    // cudaError_t error = cudaGetLastError();
-    // if(error != cudaSuccess)
-    // {
-    //     std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
-    //     exit(-1);
-    // }
 }
 
 
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
     // Set the kernel dimensions and call the kernel
-    // const int memSizeMask = (M * C * K * K) * sizeof(float);
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
     int TILE_WIDTH = 8;
@@ -258,17 +244,6 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
     int W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
     int nTiles = H_grid_blocks * W_grid_blocks; // total tiles
-    // int sharedMemConvSize = (TILE_WIDTH * TILE_HEIGHT * S * S * C) * sizeof(float);
-    // while (sharedMemConvSize > 49152){
-    //     TILE_HEIGHT /= 2;
-    //     // W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;
-    //     H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
-    //     nTiles = H_grid_blocks * W_grid_blocks; // total tiles
-    //     sharedMemConvSize = (TILE_WIDTH * TILE_HEIGHT * S * S * C) * sizeof(float);
-    //     // std::cout<<"REsizing "<<std::endl;
-    // }
-    // std::cout << "The memsize of sharedELementMatrix is: " << sharedMemConvSize << std::endl;     // max size is 49152
-
     dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
     dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
     if(kernelFlag){

@@ -5,9 +5,86 @@
 // #include <chrono>
 cudaStream_t stream1;
 __constant__ half KERNEL_DEVICE_CST[3136];
-#define TILE_WIDTH_MATMUL 32
+#define TILE_WIDTH_MATMUL 64
+__global__ void matrixMultiplySharedFusion_unroll(float* __restrict__ OUTPUT_C, half* __restrict__ inputX, const int B, const int M, const int C, const int H, const int W, const int K, const int S) {
+    extern __shared__ half tileAB[];  // Declaration of the shared memory array
+    const int H_out = (H - K)/S + 1;
+    const int W_out = (W - K)/S + 1;
+    // matrix sizes
+    const int B_width = H_out*W_out; //numBColumns;
+    const int B_height = C * K * K; // C*K*K; //numBrows;
+    const int TILE_depth = C * K * K; //TILE_depth;
+    const int Aheight = M; // numARows;
+    const int A_width = C * K * K;
+    const int sharedMatmulA_Nelements = A_width*M;
 
-__global__ void matrixMultiplyShared(float *OUTPUT_C, half *B_Matrix, const int B, const int M, const int C, const int H, const int W, const int K, const int S) {
+    const int WIDTH_unroll_tile = TILE_WIDTH_MATMUL;
+    const int HIGHT_unroll = C * K * K;
+    #define in_4d_global(i3, i2, i1, i0) inputX[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]     // in_4d(b, c, cell_height, cell_width)
+    #define A_2d(i1, i0) (KERNEL_DEVICE_CST[(i1) * (C*K*K) + i0]) // mask_4d(m, c, mask_heightindex, mask_widthindex) = mask_4d(m=y, x)
+    #define B_2d_shared(i1, i0) tileAB[ (i1) * (TILE_WIDTH_MATMUL) + i0 + sharedMatmulA_Nelements]     // outputUnrolles(b, cell_height, cell_width)
+    #define A_2d_shared(i1, i0) tileAB[ (i1) * (A_width) + i0]     // outputUnrolles(b, cell_height, cell_width)
+    #define C_4d(i3, i2, i1) OUTPUT_C[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1)]    // out_4d(b, m, h, w)
+
+    //   index values for the global output matrix
+    const int column_X_outputElement = blockDim.x * blockIdx.x + threadIdx.x;
+    const int row_Y_m_feature = blockDim.y * blockIdx.y + threadIdx.y;
+    const int batchN = blockIdx.z;
+    half Cvalue =  __float2half(0.0f);
+    
+    const int nTilesA = ceil(A_width / (float)(blockDim.x)); // load tile to shared memory For A
+    for (int tileNoX = 0; tileNoX < nTilesA; tileNoX++){
+        const int colxx = (tileNoX * blockDim.x) + threadIdx.x;
+        if ((colxx < A_width) && (row_Y_m_feature < Aheight))
+            A_2d_shared(threadIdx.y, colxx) = A_2d(row_Y_m_feature, colxx);
+        // __syncthreads();
+    }
+    __syncthreads();
+    //Unroll B
+    const int Unroll_thread = blockIdx.x * blockDim.x + threadIdx.x;
+    const int Unroll_channel = threadIdx.y;
+    
+    if ((Unroll_thread < B_width) && (Unroll_channel < C)) {
+        // Channel of the input feature map being collected by the thread
+        const int cc = Unroll_channel; 
+        // const int x_unroll = thread % WIDTH_unroll;
+        const int x_unroll = Unroll_thread;
+        // Horizontal and vertical indices of the output element
+        const int h_out = S * (x_unroll / W_out);
+        const int w_out = S * (x_unroll % W_out);
+        // Starting row index for the unrolled matrix section for channel c
+        const int y_base_unrolled = cc * K * K;
+        #pragma unroll
+        for(int q = 0; q < K; q++) {
+            #pragma unroll
+            for(int p = 0; p < K; p++) {
+                const int input_y = h_out + p;
+                const int y_unroll = y_base_unrolled + (p * K) + q;
+                // Compute linearized indices for X and X_unroll
+                const int input_x = w_out + q;
+                B_2d_shared(y_unroll, threadIdx.x) = in_4d_global(batchN, cc, input_y, input_x);
+            }
+        }
+    }
+    __syncthreads();
+    // calculate partial multiplication result for this tile 
+    for (int kk = 0; kk < TILE_depth; kk++){
+        const half a = A_2d_shared(threadIdx.y, kk);
+        const half b = B_2d_shared(kk, threadIdx.x);
+        Cvalue = __hfma(a, b, Cvalue);
+    }
+    __syncthreads();
+    //   put the correct summed up multiplication result
+    if ((row_Y_m_feature < Aheight) && (column_X_outputElement < B_width))
+        C_4d(batchN, row_Y_m_feature, column_X_outputElement) = __half2float(Cvalue);
+    #undef in_4d_global
+    #undef A_2d
+    #undef B_2d_shared
+    #undef A_2d_shared
+    #undef C_4d
+}
+
+__global__ void matrixMultiplyShared(float* __restrict__ OUTPUT_C, const half* __restrict__ B_Matrix, const int B, const int M, const int C, const int H, const int W, const int K, const int S) {
     extern __shared__ half tileAB[];  // Declaration of the shared memory array
     const int H_out = (H - K)/S + 1;
     const int W_out = (W - K)/S + 1;
@@ -18,13 +95,11 @@ __global__ void matrixMultiplyShared(float *OUTPUT_C, half *B_Matrix, const int 
     const int TILE_depth = C * K * K; //TILE_depth;
     const int Aheight = M; // numARows;
     const int A_width = C * K * K;
-    const int A_Tilewidth = TILE_WIDTH_MATMUL;
-
-    const int sharedMatmulA_Nelements = TILE_WIDTH_MATMUL*M;
+    const int sharedMatmulA_Nelements = A_width*M;
     #define A_2d(i1, i0) (KERNEL_DEVICE_CST[(i1) * (C*K*K) + i0]) // mask_4d(m, c, mask_heightindex, mask_widthindex) = mask_4d(m=y, x)
     #define B_3d_UNROLED(i2, i1, i0) B_Matrix[(i2) * (B_height * B_width) + (i1) * (B_width) + i0]     // outputUnrolles(b, cell_height, cell_width)
     #define B_2d_shared(i1, i0) tileAB[ (i1) * (TILE_WIDTH_MATMUL) + i0 + sharedMatmulA_Nelements]     // outputUnrolles(b, cell_height, cell_width)
-    #define A_2d_shared(i1, i0) tileAB[ (i1) * (A_Tilewidth) + i0]     // outputUnrolles(b, cell_height, cell_width)
+    #define A_2d_shared(i1, i0) tileAB[ (i1) * (A_width) + i0]     // outputUnrolles(b, cell_height, cell_width)
     #define C_4d(i3, i2, i1) OUTPUT_C[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1)]    // out_4d(b, m, h, w)
 
     //   index values for the global output matrix
@@ -32,50 +107,29 @@ __global__ void matrixMultiplyShared(float *OUTPUT_C, half *B_Matrix, const int 
     const int row_Y_m_feature = blockDim.y * blockIdx.y + threadIdx.y;
     const int batchN = blockIdx.z;
     half Cvalue =  __float2half(0.0f);
-    const int nTilesA = ceil(A_width / (float)(TILE_WIDTH_MATMUL)); // load tile to shared memory For A
-    const int nTilesB = ceil(B_height / (float)(M)); //load tile to shared memory For A
-    const int B_tile_multiplier = ceil(TILE_WIDTH_MATMUL / (float)M);
-
+    
+    const int nTilesA = ceil(A_width / (float)(blockDim.x)); // load tile to shared memory For A
     for (int tileNoX = 0; tileNoX < nTilesA; tileNoX++){
-        int colxx = (tileNoX * blockDim.x) + threadIdx.x;
-        if ((colxx < A_width) && (row_Y_m_feature < Aheight)){
-            A_2d_shared(threadIdx.y, threadIdx.x) = A_2d(row_Y_m_feature, colxx);
-            }
-        else{
-            A_2d_shared(threadIdx.y, threadIdx.x) = __float2half(0.0f);
-        }
-        for(int counterB = 0; counterB<B_tile_multiplier; counterB++){
-            int rowyy = ((tileNoX*B_tile_multiplier + counterB) * blockDim.y) + threadIdx.y;
-            int sharedRow_y = counterB*blockDim.y + threadIdx.y;
-            if ((column_X_outputElement < B_width) && (rowyy < B_height) && (sharedRow_y < TILE_WIDTH_MATMUL)){
-                B_2d_shared(sharedRow_y, threadIdx.x) = B_3d_UNROLED(batchN, rowyy, column_X_outputElement);
-            }
-            else{
-                B_2d_shared(sharedRow_y, threadIdx.x) = __float2half(0.0f);
-            }
-        }
-        __syncthreads();
-        for (int kk = 0; kk < TILE_WIDTH_MATMUL; kk++){
-            // const half a = A_2d_shared(threadIdx.y, kk);
-            // const half b = B_2d_shared(kk, threadIdx.x);
-            Cvalue = __hfma(A_2d_shared(threadIdx.y, kk), B_2d_shared(kk, threadIdx.x), Cvalue);
-        }
+        const int colxx = (tileNoX * blockDim.x) + threadIdx.x;
+        if ((colxx < A_width) && (row_Y_m_feature < Aheight))
+            A_2d_shared(threadIdx.y, colxx) = A_2d(row_Y_m_feature, colxx);
+        // __syncthreads();
     }
-    // __syncthreads();
-    // // // const int nTilesB = ceil(B_height / (float)(M)); //load tile to shared memory For A
-    // // for (int tileNoB = 0; tileNoB < nTilesB; tileNoB++){
-    // //     const int rowyy = (tileNoB * blockDim.y) + threadIdx.y;
-    // //     if ((column_X_outputElement < B_width) && (rowyy < B_height))
-    // //         B_2d_shared(rowyy, threadIdx.x) = B_3d_UNROLED(batchN, rowyy, column_X_outputElement);
-    // //     // __syncthreads();
-    // // }
-    // // __syncthreads();
-    // // calculate partial multiplication result for this tile 
-    // for (int kk = 0; kk < TILE_depth; kk++){
-    //     const half a = A_2d_shared(threadIdx.y, kk);
-    //     const half b = B_2d_shared(kk, threadIdx.x);
-    //     Cvalue = __hfma(a, b, Cvalue);
-    // }
+    __syncthreads();
+    const int nTilesB = ceil(B_height / (float)(M)); //load tile to shared memory For A
+    for (int tileNoB = 0; tileNoB < nTilesB; tileNoB++){
+        const int rowyy = (tileNoB * blockDim.y) + threadIdx.y;
+        if ((column_X_outputElement < B_width) && (rowyy < B_height))
+            B_2d_shared(rowyy, threadIdx.x) = B_3d_UNROLED(batchN, rowyy, column_X_outputElement);
+        // __syncthreads();
+    }
+    __syncthreads();
+    // calculate partial multiplication result for this tile 
+    for (int kk = 0; kk < TILE_depth; kk++){
+        const half a = A_2d_shared(threadIdx.y, kk);
+        const half b = B_2d_shared(kk, threadIdx.x);
+        Cvalue = __hfma(a, b, Cvalue);
+    }
     __syncthreads();
     //   put the correct summed up multiplication result
     if ((row_Y_m_feature < Aheight) && (column_X_outputElement < B_width))
@@ -83,34 +137,6 @@ __global__ void matrixMultiplyShared(float *OUTPUT_C, half *B_Matrix, const int 
     #undef A_2d
     #undef B_3d_UNROLED
     #undef B_2d_shared
-    #undef A_2d_shared
-    #undef C_4d
-}
-
-__global__ void matrixMultiply(float *OUTPUT_C, half *B_Matrix, const int B, const int M, const int C, const int H, const int W, const int K,const int S) {
-    const int H_out = (H - K)/S + 1;
-    const int W_out = (W - K)/S + 1;
-    const int WIDTH_unroll = H_out * W_out;
-    const int HIGHT_unroll = C * K * K;
-    #define A_2d(i1, i0) (KERNEL_DEVICE_CST[(i1) * (C*K*K) + i0]) // mask_4d(m, c, mask_heightindex, mask_widthindex) = mask_4d(m=y, x)
-    #define B_3d_UNROLED(i2, i1, i0) B_Matrix[(i2) * (HIGHT_unroll * WIDTH_unroll) + (i1) * (WIDTH_unroll) + i0]     // outputUnrolles(b, cell_height, cell_width)
-    #define C_4d(i3, i2, i1) OUTPUT_C[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1)]    // out_4d(b, m, h, w)
-    const int columnx_outputElement = blockDim.x * blockIdx.x + threadIdx.x;
-    const int row_m_feature = blockDim.y * blockIdx.y + threadIdx.y;
-    const int batchh= blockIdx.z;
-    const int numCColumns = WIDTH_unroll;
-    const int numCRows = M;
-    if (columnx_outputElement < numCColumns && row_m_feature < numCRows){
-        half cvalue = __float2half(0.0f); // Initialize cvalue to zero in half precision
-        for (int i = 0; i < C*K*K; i++){
-            const half a = A_2d(row_m_feature,i);
-            const half b = B_3d_UNROLED(batchh,i,columnx_outputElement);
-            cvalue = __hfma(a, b, cvalue);
-        }
-    C_4d(batchh, row_m_feature, columnx_outputElement) = __half2float(cvalue);
-    }
-    #undef A_2d
-    #undef B_3d_UNROLED
     #undef C_4d
 }
 
@@ -183,11 +209,14 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     cudaMalloc((void **)device_input_ptr, memSizeInput);
     cudaMalloc((void **)device_mask_ptr, memSizeMask);
 
+
+    
+
     // cudaMemcpyToSymbol(KERNEL_DEVICE_CST, host_mask, memSizeMask);
     cudaMemcpyAsync(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice, stream1);
     cudaMemcpyAsync(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice, stream1);
     cudaMalloc((void **)device_output_ptr, memSizeOutput);
-    // std::cout<<"B is : "<<B<<" M is : "<<M<<std::endl;
+    std::cout<<"B is : "<<B<<" M is : "<<M<<std::endl;
     // auto start6 = std::chrono::high_resolution_clock::now();
     // cudaHostRegister(const_cast<float*>(host_output), memSizeOutput, cudaHostRegisterDefault);
     // auto stop6 = std::chrono::high_resolution_clock::now();
@@ -204,7 +233,6 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     //     exit(-1);
     // }
 }
-
 
 __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *device_input, const float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
 {
@@ -227,37 +255,30 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     convertFloatToHalf<<<gridSizeFP16ConverterMask, blockSizeFP16mask, 0, stream1>>>(device_mask_half, device_mask, mMaskElements);
     cudaMemcpyToSymbol(KERNEL_DEVICE_CST, device_mask_half, memSizeMaskHalf);
     convertFloatToHalf<<<gridSizeFP16ConverterInput, blockSizeFP16Converter, 0, stream1>>>(device_input_half, device_input, nInputElements);
-
+    //Pointers to acces the fp16 portion of the arrays
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
     //Unrolled X matrix 
     const int unrolledMatrixSize = B * C * K * K * outputHeight * outputWidth;
     const int memSizeunrolledX = unrolledMatrixSize * sizeof(half);
     // std::cout <<"MATRIX SIZE is =" << outputHeight <<  std::endl;
-    half *device_UnrolledX;
+    // half *device_UnrolledX;
     
-    cudaMalloc((void **)&device_UnrolledX, memSizeunrolledX);
+    // cudaMalloc((void **)&device_UnrolledX, memSizeunrolledX);
     int blocksizeUnroll = 32;
     int blocksPerInput = (outputHeight*outputWidth*C - 1) / blocksizeUnroll + 1; //tiles in outputHeight
-    dim3 dimGridUnroll(blocksPerInput, B, 1); // Ensuring all elements are covered
-    dim3 dimBlockUnroll(blocksizeUnroll, 1, 1);
-    cudaStreamSynchronize(stream1);
-    unroll_Kernel<<<dimGridUnroll, dimBlockUnroll,0,stream1>>>(device_UnrolledX, device_input_half, B, C, H, W, K, S);
+    // dim3 dimGridUnroll(blocksPerInput, B, 1); // Ensuring all elements are covered
+    // dim3 dimBlockUnroll(blocksizeUnroll, 1, 1);
+    // cudaStreamSynchronize(stream1);
+    // unroll_Kernel<<<dimGridUnroll, dimBlockUnroll,0,stream1>>>(device_UnrolledX, device_input_half, B, C, H, W, K, S);
     // std::cout <<"Output MATRIX SIZE is =" << M << "x" << outputWidth*outputHeight << std::endl;
-    // std::cout <<"CxKxK =" << C*K*K << std::endl;
+    std::cout <<"CxKxK =" << C*K*K << std::endl;
 
+
+   
     const int Matmul_Output_height = M;
     const int Matmul_Output_width = outputHeight * outputWidth;
 
-    // // //for vanilla tiled matrix multiplyu
-    // int grid_blocks_X = (Matmul_Output_width - 1) / 64 + 1; //tiles in outputHeight
-    // int grid_blocks_Y = (Matmul_Output_height - 1) / M + 1; //tiles in outputHeight
-    // dim3 DimBlockMATRIX(64, M, 1);
-    // dim3 DimGridMATRIX(grid_blocks_X, grid_blocks_Y, B);
-    // //@@ Launch the GPU Kernel here
-    // cudaStreamSynchronize(stream1);
-    // matrixMultiply<<<DimGridMATRIX, DimBlockMATRIX,0,stream1>>>(device_output, device_UnrolledX, B, M, C, H, W, K, S);
-    
     //for shared tiled matrix multiplyu
     int grid_blocks_X = (Matmul_Output_width - 1) / TILE_WIDTH_MATMUL + 1; // TILE_WIDTH_MATMUL = 32
     int grid_blocks_Y = (Matmul_Output_height - 1) / M + 1; //tiles in outputHeight should be 1
@@ -265,27 +286,27 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     // std::cout <<"DimBlock_sharedMatmul  is =" << TILE_WIDTH_MATMUL << "x" << M << std::endl;
     dim3 DimGrid_sharedMatmul(grid_blocks_X, grid_blocks_Y, B);
     // std::cout <<"DimGrid_sharedMatmul  is =" << grid_blocks_X << "x" << grid_blocks_Y << "x" << B << std::endl;
-    // const int sharedMatmulBsize = C*K*K*TILE_WIDTH_MATMUL * sizeof(half);
-    // const int sharedMatmulAsize = C*K*K*M * sizeof(half);
-    const int BtileHeight = ceil(TILE_WIDTH_MATMUL/(float)M) * M;
-    const int sharedMatmulBsize = BtileHeight*TILE_WIDTH_MATMUL * sizeof(half);
-    const int sharedMatmulAsize = M * TILE_WIDTH_MATMUL * sizeof(half);
+    const int sharedMatmulBsize = C*K*K*TILE_WIDTH_MATMUL * sizeof(half);
+    const int sharedMatmulAsize = C*K*K*M * sizeof(half);
     const int sharedMem = sharedMatmulAsize + sharedMatmulBsize;
     //@@ Launch the GPU Kernel here
     cudaStreamSynchronize(stream1);
-    matrixMultiplyShared<<<DimGrid_sharedMatmul,DimBlock_sharedMatmul,sharedMem,stream1>>>(device_output, device_UnrolledX, B, M, C, H, W, K, S);
+    // matrixMultiplyShared<<<DimGrid_sharedMatmul,DimBlock_sharedMatmul,sharedMem,stream1>>>(device_output, device_UnrolledX, B, M, C, H, W, K, S);
+
+    matrixMultiplySharedFusion_unroll<<<DimGrid_sharedMatmul,DimBlock_sharedMatmul,sharedMem,stream1>>>(device_output, device_input_half, B, M, C, H, W, K, S);
 
     cudaStreamSynchronize(stream1);
-    cudaFree(device_UnrolledX);
+    // cudaFree(device_UnrolledX);
     cudaFree(device_input_half);
     cudaFree(device_mask_half);
-
-    cudaError_t error = cudaGetLastError();
-    if(error != cudaSuccess)
-    {
-        std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
-        exit(-1);
-    }
+    // std::cout << outputWidth << " x " << outputHeight << " x " << C << " and K is " << K << " and S is " << S << std::endl;
+    
+    // cudaError_t error = cudaGetLastError();
+    // if(error != cudaSuccess)
+    // {
+    //     std::cout<<"CUDA error: "<<cudaGetErrorString(error)<<std::endl;
+    //     exit(-1);
+    // }
 }
 
 __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *device_output, float *device_input, float *device_mask, const int B, const int M, const int C, const int H, const int W, const int K, const int S)
