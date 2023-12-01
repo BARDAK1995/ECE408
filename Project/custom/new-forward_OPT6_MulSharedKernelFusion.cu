@@ -10,14 +10,14 @@ __global__ void matrixMultiplySharedFusion_unroll(float* __restrict__ OUTPUT_C, 
     const int W_out = (W - K)/S + 1;
     // matrix sizes
     const int B_width = H_out*W_out; //numBColumns;
-    const int B_height = C * K * K; // C*K*K; //numBrows;
+    // const int B_height = C * K * K; // C*K*K; //numBrows;
     const int TILE_depth = C * K * K; //TILE_depth;
     const int Aheight = M; // numARows;
     const int A_width = C * K * K;
     const int sharedMatmulA_Nelements = A_width*M;
 
-    const int WIDTH_unroll_tile = TILE_WIDTH_MATMUL;
-    const int HIGHT_unroll = C * K * K;
+    // const int WIDTH_unroll_tile = TILE_WIDTH_MATMUL;
+    // const int HIGHT_unroll = C * K * K;
     #define in_4d_global(i3, i2, i1, i0) inputX[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]     // in_4d(b, c, cell_height, cell_width)
     #define A_2d(i1, i0) (KERNEL_DEVICE_CST[(i1) * (C*K*K) + i0]) // mask_4d(m, c, mask_heightindex, mask_widthindex) = mask_4d(m=y, x)
     #define B_2d_shared(i1, i0) tileAB[ (i1) * (TILE_WIDTH_MATMUL) + i0 + sharedMatmulA_Nelements]     // outputUnrolles(b, cell_height, cell_width)

@@ -13,10 +13,10 @@ __global__ void matrixMultiplyShared(float *OUTPUT_C, half *B_Matrix, const int 
     // matrix sizes
     const int B_width = H_out*W_out; //numBColumns;
     const int B_height = C * K * K; // C*K*K; //numBrows;
-    const int TILE_depth = C * K * K; //TILE_depth;
+    // const int TILE_depth = C * K * K; //TILE_depth;
     const int Aheight = M; // numARows;
     const int A_width = C * K * K;
-    const int A_Tilewidth = TILE_WIDTH_MATMUL;
+    // const int A_Tilewidth = TILE_WIDTH_MATMUL;
 
     const int sharedMatmulA_Nelements = TILE_WIDTH_MATMUL*M;
     #define A_2d(i1, i0) (KERNEL_DEVICE_CST[(i1) * (C*K*K) + i0]) // mask_4d(m, c, mask_heightindex, mask_widthindex) = mask_4d(m=y, x)
@@ -93,8 +93,8 @@ __global__ void unroll_Kernel(half *outputUnrolled, const half *inputX, const in
         const int w_base_unrolled = (c * K * K);
         #pragma unroll 7
         for(int p = 0; p < K; p++) {
-            #pragma unroll 7
             const int input_y = h_out + p;
+            #pragma unroll 7
             for(int q = 0; q < K; q++) {
                 const int y_unroll = w_base_unrolled + (p * K) + q;
                 const int input_x = w_out + q;
