@@ -386,14 +386,9 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
     // Allocate memory and copy over the relevant data structures to the GPU
     const int memSizeInput = (B * C * H * W) * sizeof(float);
     const int memSizeMask = (M * C * K * K) * sizeof(float);
-    // std::cout << "The value of memSizeMask is: " << memSizeMask << std::endl;
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
     const int memSizeOutput = (B * M * outputHeight * outputWidth) * sizeof(float);
-    // std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S <<std::endl;
-    // std::cout << "output height is:  " << outputHeight << "output width is: " << outputWidth << "Channel is: " << C << "stride  is: " << S << std::endl;
-    // std::cout << "channel size: " << C << "kernel width is: " << K << "stride  is: " << S << "M  is: " << M <<std::endl;
-
     // We pass double pointers for you to initialize the relevant device pointers,
     //  which are passed to the other two functions.
     cudaMalloc((void **)device_input_ptr, memSizeInput);

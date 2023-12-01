@@ -244,8 +244,6 @@ __host__ void GPUInterface::conv_forward_gpu_prolog(const float *host_output, co
 
     cudaMalloc((void **)device_input_ptr, memSizeInput);
     cudaMalloc((void **)device_mask_ptr, memSizeMask);
-    // cudaMemcpyAsync(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice, stream1);
-    // cudaMemcpyAsync(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice, stream1);
     cudaMemcpyAsync(*device_input_ptr, host_input, memSizeInput, cudaMemcpyHostToDevice);
     cudaMemcpyAsync(*device_mask_ptr, host_mask, memSizeMask, cudaMemcpyHostToDevice);
 
@@ -274,8 +272,6 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     convertFloatToHalf<<<gridSizeFP16ConverterInput, blockSizeFP16Converter,0,0>>>(device_input_half, device_input, nInputElements);
     const int outputHeight = (H - K)/S + 1;
     const int outputWidth = (W - K)/S + 1;
-    // half *device_mask_half_ptr = reinterpret_cast<half*>(const_cast<float*>(device_mask)) + 2*mMaskElements;
-    // half *device_input_half_ptr = reinterpret_cast<half*>(const_cast<float*>(device_input)) + 2*nInputElements;
     int TILE_WIDTH = 6;
     int TILE_HEIGHT = 48;
     if(outputWidth==80){
@@ -317,7 +313,6 @@ __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *d
     cudaFree(device_mask);
     cudaFree(device_output);
     cudaHostUnregister(host_output);
-
 }
 
 
