@@ -50,7 +50,6 @@ __global__ void conv_forward_kernel_basic_16FP(float* __restrict__ output, const
                     input_x = input_w_start + i;
                     acc = __hadd(acc, __hmul(in_4d_global(b, c, input_y, input_x), mask_4d(m_feature, c, j, i)));
                     // acc += in_4d_global(b, c, input_y, input_x) * mask_4d(m_feature, c, j, i);
-                    // acc = __hfma(in_4d_global(b, c, input_y, input_x), mask_4d(m_feature, c, j, i), acc);
                 }
             }
         }
@@ -285,7 +284,7 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     }
     else if(outputWidth==34){
         TILE_WIDTH = 8;
-        TILE_HEIGHT = 34;
+        TILE_HEIGHT = 48;
     }
     int H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
     int W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
@@ -313,9 +312,7 @@ __host__ void GPUInterface::conv_forward_gpu_epilog(float *host_output, float *d
     const int nOutputElements = (B * M * outputHeight * outputWidth);
     const int memSizeOutput = nOutputElements * sizeof(float);
     cudaHostRegister(host_output, memSizeOutput, cudaHostRegisterDefault);
-    // cudaStreamSynchronize(stream1);
     cudaMemcpyAsync(host_output, device_output, memSizeOutput, cudaMemcpyDeviceToHost);
-    // cudaStreamDestroy(stream1);    
     cudaFree(device_input);
     cudaFree(device_mask);
     cudaFree(device_output);
