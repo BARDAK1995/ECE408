@@ -285,23 +285,17 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
     int H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
     int W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
     int nTiles = H_grid_blocks * W_grid_blocks; // total tiles
-    
+    dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
+    dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
     if(K==7){
         if(C==1){
-            dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
-            dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
             conv_forward_kernel_basic_16FP_convLayerK7_CnstMask_C1<<<dimGrid, dimBlock,0,0>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
         }
         else{
-            //second layer
-            dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
-            dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
             conv_forward_kernel_basic_16FP_convLayerK7_CnstMask<<<dimGrid, dimBlock,0,0>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
         }
     }
     else{
-        dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
-        dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
         conv_forward_kernel_basic_16FP<<<dimGrid, dimBlock,0,0>>>(device_output, device_input_half, device_mask_half, B, M, C, H, W, K, S);
     }
 }
