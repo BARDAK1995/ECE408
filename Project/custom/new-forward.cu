@@ -245,6 +245,157 @@ __global__ void conv_forward_kernel_ConstantMem_SharedMem(float* output, const f
     #undef mask_4d
 }
 
+__global__ void conv_forward_kernel_ConstantMem_SharedMem1(float* __restrict__ output, const float* __restrict__ input, const float* __restrict__ mask, const int B, const int M, const int C, const int H, const int W, const int K,const int S)
+{
+    /*
+    Function paramter definitions:
+    output - output
+    input - input
+    KERNEL_DEVICE_CST - convolution kernel mask in constant MEM
+    B - batch_size (number of images in x)
+    M - number of output feature maps
+    C - number of input feature maps
+    H - input height dimension
+    W - input width dimension
+    K - kernel height and width (K x K)
+    S - stride step length
+    */
+    extern __shared__ float N_ds[]; //size determined dynamicly at runtime, we will rely on cache to catch others
+    const int H_out = (H - K)/S + 1;
+    const int W_out = (W - K)/S + 1;
+    const int tile_width = blockDim.x;
+    const int tile_height = blockDim.y;
+    const int SharedMatrix_width = (tile_width+K-1) * S;
+    const int SharedMatrix_height = (tile_height+K-1) * S;
+    #define out_4d(i3, i2, i1, i0) output[(i3) * (M * H_out * W_out) + (i2) * (H_out * W_out) + (i1) * (W_out) + i0]    // out_4d(b, m, h, w)
+    #define in_4d_global(i3, i2, i1, i0) input[(i3) * (C * H * W) + (i2) * (H * W) + (i1) * (W) + i0]                          // in_4d_global(b, c, cell_height, cell_width)
+    #define in_4d_shared(i2, i1, i0) N_ds[(i2) * (SharedMatrix_height * SharedMatrix_width) + (i1) * (SharedMatrix_width) + i0]                          // in_4d_shared(c, cell_height, cell_width)
+    // #define in_4d_shared(i2, i1, i0) N_ds[(i2) * (SharedMatrix_height * 32) + (i1) * (32) + i0]                          // in_4d_shared(c, cell_height, cell_width)
+    #define mask_4d(i3, i2, i1, i0) KERNEL_DEVICE_CST[(i3) * (C * K * K) + (i2) * (K * K) + (i1) * (K) + i0]                         // mask_4d(m, c, mask_heightindex, mask_widthindex)
+    // Insert your GPU convolution kernel code here
+    const int W_grid_blocks = (W_out - 1) / tile_width + 1;  //tiles in outputWidth
+    const int m_feature = blockIdx.x;
+    const int b = blockIdx.z;
+    // y and x indexes for the output matrix
+    const int output_h = (blockIdx.y / W_grid_blocks) * tile_height + threadIdx.y;
+    const int output_w = (blockIdx.y % W_grid_blocks) * tile_width + threadIdx.x;
+    // corresponding y and x starting indexes for input matrix for the current block 
+    const int input_y_Block_start = ((blockIdx.y / W_grid_blocks) * tile_height) * S; 
+    const int input_x_Block_start = ((blockIdx.y % W_grid_blocks) * tile_width) * S;
+    int input_x;
+    int input_y;
+    int shared_x;
+    int shared_y;
+    // starting index for current Block
+    //load Shared Memory
+    bool is_X_inbound;
+    bool is_Y_inbound;
+    const int c  = 0;
+
+    
+    shared_y = threadIdx.y;
+    shared_x = threadIdx.x;
+    input_y = input_y_Block_start + shared_y;
+    input_x = input_x_Block_start + shared_x;
+    // is_Y_inbound = shared_y < SharedMatrix_height;
+    is_Y_inbound = shared_y < SharedMatrix_height;
+    is_X_inbound = shared_x < SharedMatrix_width;
+    if(is_Y_inbound && is_X_inbound){in_4d_shared(c, shared_y, shared_x) = in_4d_global(b, c, input_y, input_x);}
+    //lowerleft
+    shared_y = threadIdx.y + tile_height;
+    input_y = input_y_Block_start + shared_y;
+    is_Y_inbound = shared_y < SharedMatrix_height;
+    if(is_Y_inbound && is_X_inbound){in_4d_shared(c, shared_y, shared_x) = in_4d_global(b, c, input_y, input_x);}
+    //lowerright
+    shared_x = threadIdx.x + tile_width;
+    input_x = input_x_Block_start + shared_x;
+    is_X_inbound = shared_x < SharedMatrix_width;
+    if(is_Y_inbound && is_X_inbound){in_4d_shared(c, shared_y, shared_x) = in_4d_global(b, c, input_y, input_x);}
+    //upperRight
+    shared_y = threadIdx.y ;
+    input_y = input_y_Block_start + shared_y;
+    is_Y_inbound = shared_y < SharedMatrix_height;
+    if(is_Y_inbound && is_X_inbound){in_4d_shared(c, shared_y, shared_x) = in_4d_global(b, c, input_y, input_x);}
+
+
+    __syncthreads();
+    const int input_h_start = output_h * S; 
+    const int input_w_start = output_w * S;
+    float acc = 0.0f;
+    if((output_h < H_out) && (output_w < W_out)){
+        #pragma unroll 7
+        for(int j = 0; j < K; ++j){   // KxK filter (height)
+            acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, j, 0); 
+            acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, j, 1); 
+            acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, j, 2); 
+            acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, j, 3); 
+            acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, j, 4); 
+            acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, j, 5); 
+            acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, j, 6); 
+
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 0, 0); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 0, 1); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 0, 2); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 0, 3); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 0, 4); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 0, 5); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 0, 6); 
+
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 1, 0); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 1, 1); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 1, 2); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 1, 3); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 1, 4); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 1, 5); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 1, 6); 
+
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 2, 0); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 2, 1); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 2, 2); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 2, 3); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 2, 4); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 2, 5); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 2, 6); 
+
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 3, 0); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 3, 1); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 3, 2); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 3, 3); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 3, 4); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 3, 5); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 3, 6); 
+
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 4, 0); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 4, 1); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 4, 2); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 4, 3); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 4, 4); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 4, 5); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 4, 6); 
+
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 5, 0); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 5, 1); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 5, 2); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 5, 3); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 5, 4); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 5, 5); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 5, 6); 
+
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 6, 0); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 6, 1); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 6, 2); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 6, 3); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 6, 4); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 6, 5); 
+            // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 6, 6); 
+        }
+    out_4d(b, m_feature, output_h, output_w) = acc;
+    }
+    #undef out_4d
+    #undef in_4d_global
+    #undef mask_4d
+}
+
 __global__ void conv_forward_kernel_ConstantMem_SharedMem2(float* __restrict__ output, const float* __restrict__ input, const float* __restrict__ mask, const int B, const int M, const int C, const int H, const int W, const int K,const int S)
 {
     /*
@@ -312,10 +463,69 @@ __global__ void conv_forward_kernel_ConstantMem_SharedMem2(float* __restrict__ o
         for(int c = 0; c < C; ++c){   // sum over all input channels
             #pragma unroll 7
             for(int j = 0; j < K; ++j){   // KxK filter (height)
-                #pragma unroll 7
-                for(int i = 0; i < K; ++i){   // KxK filter (width)
-                    acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + i) * mask_4d(m_feature, c, j, i); 
-                }
+                acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, j, 0); 
+                acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, j, 1); 
+                acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, j, 2); 
+                acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, j, 3); 
+                acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, j, 4); 
+                acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, j, 5); 
+                acc += in_4d_shared(c, input_h_start - input_y_Block_start + j, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, j, 6); 
+
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 0, 0); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 0, 1); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 0, 2); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 0, 3); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 0, 4); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 0, 5); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 0, 6); 
+
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 1, 0); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 1, 1); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 1, 2); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 1, 3); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 1, 4); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 1, 5); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 1, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 1, 6); 
+
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 2, 0); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 2, 1); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 2, 2); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 2, 3); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 2, 4); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 2, 5); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 2, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 2, 6); 
+
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 3, 0); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 3, 1); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 3, 2); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 3, 3); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 3, 4); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 3, 5); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 3, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 3, 6); 
+
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 4, 0); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 4, 1); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 4, 2); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 4, 3); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 4, 4); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 4, 5); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 4, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 4, 6); 
+
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 5, 0); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 5, 1); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 5, 2); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 5, 3); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 5, 4); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 5, 5); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 5, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 5, 6); 
+
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 0) * mask_4d(m_feature, c, 6, 0); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 1) * mask_4d(m_feature, c, 6, 1); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 2) * mask_4d(m_feature, c, 6, 2); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 3) * mask_4d(m_feature, c, 6, 3); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 4) * mask_4d(m_feature, c, 6, 4); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 5) * mask_4d(m_feature, c, 6, 5); 
+                // acc += in_4d_shared(c, input_h_start - input_y_Block_start + 6, input_w_start - input_x_Block_start + 6) * mask_4d(m_feature, c, 6, 6); 
             }
         }
         out_4d(b, m_feature, output_h, output_w) = acc;
@@ -515,23 +725,21 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
             W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
             nTiles = H_grid_blocks * W_grid_blocks; // total tiles
             sharedMemConvSize = ((TILE_WIDTH+K-1) * (TILE_HEIGHT+K-1) * S * S * C) * sizeof(float);
-            // W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;
             dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
             dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
             conv_forward_kernel_ConstantMem_SharedMem2<<<dimGrid, dimBlock, sharedMemConvSize>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
-            std::cout << "C" << C << std::endl;
         }
         else{
-            //layer1
+            //layer1 80x80 
             TILE_WIDTH = 16;
             TILE_HEIGHT = 16;
             H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
             W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;  //tiles in outputWidth
             nTiles = H_grid_blocks * W_grid_blocks; // total tiles
-            sharedMemConvSize = (TILE_WIDTH * TILE_HEIGHT * S * S * C) * sizeof(float);
+            sharedMemConvSize = ((TILE_WIDTH+K-1) * (TILE_HEIGHT+K-1) * S * S * C) * sizeof(float);
             dim3 dimBlock(TILE_WIDTH, TILE_HEIGHT, 1);
             dim3 dimGrid(M, nTiles, B); // Ensuring all elements are covered
-            conv_forward_kernel_ConstantMem_SharedMemUnroll<<<dimGrid, dimBlock, sharedMemConvSize>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);
+            conv_forward_kernel_ConstantMem_SharedMem1<<<dimGrid, dimBlock, sharedMemConvSize>>>(device_output, device_input, device_mask, B, M, C, H, W, K, S);            
         }
     }
     else{
@@ -541,7 +749,6 @@ __host__ void GPUInterface::conv_forward_gpu(float *device_output, const float *
         sharedMemConvSize = (TILE_WIDTH * TILE_HEIGHT * S * S * C) * sizeof(float);
         while (sharedMemConvSize > 49152){
             TILE_HEIGHT /= 2;
-            // W_grid_blocks = (outputWidth - 1) / TILE_WIDTH + 1;
             H_grid_blocks = (outputHeight - 1) / TILE_HEIGHT + 1; //tiles in outputHeight
             nTiles = H_grid_blocks * W_grid_blocks; // total tiles
             sharedMemConvSize = (TILE_WIDTH * TILE_HEIGHT * S * S * C) * sizeof(float);
